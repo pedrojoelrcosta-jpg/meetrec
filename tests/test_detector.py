@@ -74,7 +74,9 @@ def test_stops_only_after_stop_debounce():
     run_ticks(detector, [(t, []) for t in range(102, 131, 2)])
     assert [e for e in events if e[0] == "ended"] == []
     detector.tick(132, [])
-    assert ("ended", 100.0) in events  # duration = cooldown start - capture start
+    # duration = cooldown start (first tick without capture, t=102) - capture
+    # start (t=0); with 2s polling the ±2s at the edge is expected
+    assert ("ended", 102) in events
     assert detector.state is State.IDLE
 
 

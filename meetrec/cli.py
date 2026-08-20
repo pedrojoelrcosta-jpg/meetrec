@@ -225,6 +225,12 @@ def _pid_alive(pid: int) -> bool:
 # -- entry point -------------------------------------------------------------
 
 def main() -> None:
+    # Windows consoles default to a legacy codepage; keep output UTF-8
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8")
+        except (AttributeError, OSError):
+            pass
     parser = argparse.ArgumentParser(
         prog="meetrec",
         description="Automatic meeting recording, transcription and "

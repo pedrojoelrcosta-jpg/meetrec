@@ -28,8 +28,9 @@ DEFAULTS: dict = {
     "diarization": {"similarity_threshold": 0.75},
     "summary": {
         "backend": "gemini",
+        "language": "auto",
         "gemini_model": "gemini-2.0-flash",
-        "ollama_model": "llama3.1",
+        "ollama_model": "gemma3:4b",
         "ollama_url": "http://localhost:11434",
         "anthropic_model": "claude-sonnet-5",
     },

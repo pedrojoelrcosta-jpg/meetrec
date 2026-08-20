@@ -188,7 +188,10 @@ def process_session(cfg: dict, session_dir: Path,
     try:
         transcript_text = (session_dir / "transcricao.txt") \
             .read_text(encoding="utf-8")
-        summary_text = summarize(cfg, meta["language"], transcript_text)
+        # summary.language: auto = language detected in the meeting; pt/en force
+        lang_cfg = cfg["summary"].get("language", "auto")
+        summary_lang = meta["language"] if lang_cfg == "auto" else lang_cfg
+        summary_text = summarize(cfg, summary_lang, transcript_text)
         (session_dir / "resumo.md").write_text(summary_text, encoding="utf-8")
     except Exception:
         log.exception("Summary failed; transcript is intact")

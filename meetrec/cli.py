@@ -171,7 +171,7 @@ def cmd_record(cfg: dict, args) -> None:
                     ensure_ascii=False, indent=2),
         encoding="utf-8")
     process_session(cfg, recorder.session_dir)
-    print(f"Done: {recorder.session_dir}")
+    _print_outputs(recorder.session_dir)
 
 
 def cmd_list(cfg: dict, args) -> None:
@@ -318,7 +318,7 @@ def cmd_reprocess(cfg: dict, args) -> None:
             (session_dir / name).unlink(missing_ok=True)
     _setup_logging(_log_level(cfg, args))
     process_session(cfg, session_dir, with_notifications=False)
-    print(f"Reprocessed {session_dir}")
+    _print_outputs(session_dir)
 
 
 def cmd_label(cfg: dict, args) -> None:
@@ -464,6 +464,19 @@ def cmd_autostart(cfg: dict, args) -> None:
         subprocess.run(["schtasks", "/Delete", "/F", "/TN", task_name],
                        check=False)
         print(f"Scheduled task '{task_name}' removed.")
+
+
+def _print_outputs(session_dir: Path) -> None:
+    """Tell the user exactly where the results are."""
+    print(f"\nDone. Output files in {session_dir}:")
+    for name, label in (("transcript.txt", "transcript (plain text)"),
+                        ("transcript.md", "transcript (markdown)"),
+                        ("summary.md", "summary"),
+                        ("audio.flac", "audio"),
+                        ("meta.json", "metadata")):
+        path = session_dir / name
+        if path.exists():
+            print(f"  {label:<24} {path}")
 
 
 def _wait_for_enter(min_wait_s: float = 2.0) -> None:

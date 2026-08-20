@@ -83,7 +83,10 @@ def diarize_track(wav_path: Path) -> list[dict]:
     if torch.cuda.is_available():
         pipeline.to(torch.device("cuda"))
     log.info("Diarizing %s ...", wav_path.name)
-    annotation = pipeline(_audio_dict(wav_path))
+    result = pipeline(_audio_dict(wav_path))
+    # pyannote.audio 3.x returns the Annotation directly; 4.x wraps it in a
+    # DiarizeOutput whose .speaker_diarization holds the Annotation
+    annotation = getattr(result, "speaker_diarization", result)
     turns = [
         {"speaker": speaker, "start": round(turn.start, 2),
          "end": round(turn.end, 2)}

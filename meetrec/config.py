@@ -53,6 +53,8 @@ DEFAULTS: dict = {
         # re-detect the language per segment — meetings that switch between
         # languages (e.g. PT and EN) transcribe correctly at a small speed cost
         "multilingual": True,
+        # batched inference: 2-4x faster, especially on CPU
+        "batched": True,
     },
     "diarization": {
         "similarity_threshold": 0.75,

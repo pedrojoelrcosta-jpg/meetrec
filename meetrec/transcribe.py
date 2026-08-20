@@ -78,14 +78,41 @@ def transcribe_track(cfg: dict, wav_path: Path) -> dict:
     )
     if cfg["transcription"].get("multilingual", True):
         kwargs["multilingual"] = True
-    try:
-        segments_iter, info = model.transcribe(str(wav_path), **kwargs)
-    except TypeError:
-        # older faster-whisper without the multilingual parameter
-        kwargs.pop("multilingual", None)
-        log.warning("faster-whisper version lacks multilingual=; "
-                    "falling back to single-language detection")
-        segments_iter, info = model.transcribe(str(wav_path), **kwargs)
+
+    segments_iter = info = None
+    if cfg["transcription"].get("batched", True):
+        # batched inference is 2-4x faster, which matters a lot on CPU;
+        # fall back to the sequential path on any incompatibility
+        try:
+            from faster_whisper import BatchedInferencePipeline
+            batched = BatchedInferencePipeline(model)
+        except Exception:
+            log.warning("Batched pipeline unavailable; using the "
+                        "sequential path", exc_info=True)
+            batched = None
+        if batched is not None:
+            for attempt_kwargs in (kwargs,
+                                   {k: v for k, v in kwargs.items()
+                                    if k != "multilingual"}):
+                try:
+                    segments_iter, info = batched.transcribe(
+                        str(wav_path), batch_size=8, **attempt_kwargs)
+                    break
+                except TypeError:
+                    continue  # unsupported kwarg for this version
+                except Exception:
+                    log.warning("Batched transcription failed; using the "
+                                "sequential path", exc_info=True)
+                    break
+    if segments_iter is None:
+        try:
+            segments_iter, info = model.transcribe(str(wav_path), **kwargs)
+        except TypeError:
+            # older faster-whisper without the multilingual parameter
+            kwargs.pop("multilingual", None)
+            log.warning("faster-whisper version lacks multilingual=; "
+                        "falling back to single-language detection")
+            segments_iter, info = model.transcribe(str(wav_path), **kwargs)
     segments = []
     for seg in segments_iter:
         segments.append({

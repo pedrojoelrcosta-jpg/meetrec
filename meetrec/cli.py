@@ -134,8 +134,33 @@ def cmd_record(cfg: dict, args) -> None:
     print(f"Recording to {recorder.session_dir}"
           + (" (in-person mode: the mic track will be diarized)"
              if in_person else ""))
+
+    time.sleep(1.5)  # let the capture threads open their devices
+    mic_dead = recorder.mic.error is not None
+    sys_dead = recorder.sys.error is not None
+    if mic_dead and sys_dead:
+        recorder.stop()
+        import shutil
+        shutil.rmtree(recorder.session_dir, ignore_errors=True)
+        sys.exit("Both audio devices failed to open — nothing to record.\n"
+                 f"  mic: {recorder.mic.error}\n  sys: {recorder.sys.error}\n"
+                 "Run `meetrec doctor` to check the audio setup.")
+    if mic_dead:
+        print(f"! Microphone failed ({recorder.mic.error}) — recording "
+              "system audio only.")
+    if sys_dead:
+        print(f"! System-audio loopback failed ({recorder.sys.error}) — "
+              "recording the microphone only"
+              + (" (fine for in-person meetings)." if in_person else "."))
+
+    _drain_console_input()  # a stray Enter must not stop the recording
     input("Press Enter to stop...\n")
     stats = recorder.stop()
+    if stats["duration_s"] < 3:
+        import shutil
+        shutil.rmtree(recorder.session_dir, ignore_errors=True)
+        sys.exit(f"Stopped after {stats['duration_s']}s — treating as "
+                 "accidental; session discarded.")
     print(f"Recorded {stats['duration_s']}s. Processing...")
     import json as _json
     (recorder.session_dir / "meta.json").write_text(
@@ -438,6 +463,18 @@ def cmd_autostart(cfg: dict, args) -> None:
         subprocess.run(["schtasks", "/Delete", "/F", "/TN", task_name],
                        check=False)
         print(f"Scheduled task '{task_name}' removed.")
+
+
+def _drain_console_input() -> None:
+    """Discard keystrokes buffered before we started waiting (e.g. a stray
+    Enter left over from a previous Ctrl+C) — they would stop the recording
+    instantly."""
+    try:
+        import msvcrt
+        while msvcrt.kbhit():
+            msvcrt.getwch()
+    except ImportError:
+        pass
 
 
 def _pid_alive(pid: int) -> bool:

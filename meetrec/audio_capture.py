@@ -30,7 +30,27 @@ def _default_mic(p: pyaudio.PyAudio) -> dict:
 
 
 def _default_loopback(p: pyaudio.PyAudio) -> dict:
-    return p.get_default_wasapi_loopback()
+    try:
+        return p.get_default_wasapi_loopback()
+    except (ValueError, OSError) as exc:
+        # PyAudioWPatch's direct resolution can fail right after a default-
+        # device change; fall back to scanning the loopback list, preferring
+        # the one that matches the default output's name
+        try:
+            default_name = p.get_default_output_device_info().get("name", "")
+        except OSError:
+            default_name = ""
+        candidates = list(p.get_loopback_device_info_generator())
+        for dev in candidates:
+            if default_name and default_name in dev["name"]:
+                log.warning("Default loopback resolution failed (%s); using "
+                            "'%s'", exc, dev["name"])
+                return dev
+        if candidates:
+            log.warning("Default loopback resolution failed (%s); using "
+                        "first available: '%s'", exc, candidates[0]["name"])
+            return candidates[0]
+        raise
 
 
 class _TrackRecorder(threading.Thread):

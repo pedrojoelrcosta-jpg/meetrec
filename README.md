@@ -261,6 +261,7 @@ code, so a missing key just falls back.
 | `transcription.model` | `large-v3-turbo` | Any faster-whisper model name (`medium`, `small`… for weaker CPUs) |
 | `transcription.device` | `auto` | `auto` picks CUDA when available, else CPU |
 | `transcription.compute_type` | `auto` | `auto` = float16 on CUDA, int8 on CPU |
+| `transcription.multilingual` | `true` | Re-detect the language per segment, so meetings that switch languages mid-call (PT ↔ EN) transcribe each part correctly. Small speed cost; turn off for strictly single-language meetings |
 | `diarization.similarity_threshold` | `0.75` | Cosine threshold for voiceprint recognition |
 | `summary.backend` | `gemini` | `gemini` \| `ollama` \| `anthropic` — the others act as fallbacks |
 | `summary.language` | `auto` | Language of the summary (file **and** Telegram message): `auto` = the language detected in the meeting; `pt` or `en` to force one — useful when meetings mix languages and you always want the summary in a single one |

@@ -71,12 +71,21 @@ def transcribe_track(cfg: dict, wav_path: Path) -> dict:
     Each segment: {start, end, text, words: [{start, end, word}]}.
     """
     model = get_model(cfg)
-    segments_iter, info = model.transcribe(
-        str(wav_path),
+    kwargs = dict(
         language=None,
         vad_filter=True,
         word_timestamps=True,
     )
+    if cfg["transcription"].get("multilingual", True):
+        kwargs["multilingual"] = True
+    try:
+        segments_iter, info = model.transcribe(str(wav_path), **kwargs)
+    except TypeError:
+        # older faster-whisper without the multilingual parameter
+        kwargs.pop("multilingual", None)
+        log.warning("faster-whisper version lacks multilingual=; "
+                    "falling back to single-language detection")
+        segments_iter, info = model.transcribe(str(wav_path), **kwargs)
     segments = []
     for seg in segments_iter:
         segments.append({

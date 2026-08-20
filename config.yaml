@@ -17,6 +17,8 @@ transcription:
   model: large-v3-turbo
   device: auto               # auto | cuda | cpu
   compute_type: auto         # auto -> float16 on CUDA, int8 on CPU
+  multilingual: true         # re-detect language per segment (code-switching
+                             # meetings, e.g. PT+EN); small speed cost
 
 diarization:
   similarity_threshold: 0.75 # cosine threshold to recognize a known voice

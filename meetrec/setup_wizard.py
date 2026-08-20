@@ -153,6 +153,10 @@ def run_wizard(cfg: dict) -> None:
     out_dir = _ask("Folder for meeting outputs", cfg["output"]["dir"])
     language = _ask("Summary language: auto = meeting language, or pt/en",
                     cfg["summary"].get("language", "auto"))
+    multilingual = _ask_yn(
+        "Do your meetings mix languages (e.g. PT and EN)? Enables "
+        "per-segment language detection",
+        cfg["transcription"].get("multilingual", True))
     send_transcript = _ask_yn(
         "Send the FULL transcript to Telegram too? (summary is always sent)",
         cfg["telegram"]["send_full_transcript"])
@@ -163,6 +167,7 @@ def run_wizard(cfg: dict) -> None:
         file_cfg = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
     file_cfg.setdefault("output", {})["dir"] = out_dir
     file_cfg.setdefault("summary", {})["language"] = language
+    file_cfg.setdefault("transcription", {})["multilingual"] = multilingual
     file_cfg.setdefault("telegram", {})["send_full_transcript"] = send_transcript
     config_path.write_text(yaml.safe_dump(file_cfg, sort_keys=False,
                                           allow_unicode=True),

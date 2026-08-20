@@ -40,6 +40,9 @@ DEFAULTS: dict = {
         "model": "large-v3-turbo",
         "device": "auto",
         "compute_type": "auto",
+        # re-detect the language per segment — meetings that switch between
+        # languages (e.g. PT and EN) transcribe correctly at a small speed cost
+        "multilingual": True,
     },
     "diarization": {
         "similarity_threshold": 0.75,

@@ -36,6 +36,26 @@ def _extract_excerpt(wav_path: Path, start: float, end: float,
             out.writeframes(frames)
 
 
+def _extract_excerpt_flac(flac_path: Path, start: float, end: float,
+                          out_path: Path) -> None:
+    """Fallback when track_sys.wav was cleaned up: the system track lives on
+    the right channel of audio.flac."""
+    import numpy as np
+    import soundfile as sf
+
+    with sf.SoundFile(str(flac_path)) as flac:
+        rate = flac.samplerate
+        flac.seek(int(start * rate))
+        frames = flac.read(int(min(end - start, EXCERPT_MAX_S) * rate),
+                           dtype="int16", always_2d=True)
+    channel = frames[:, 1] if frames.shape[1] > 1 else frames[:, 0]
+    with wave.open(str(out_path), "wb") as out:
+        out.setnchannels(1)
+        out.setsampwidth(2)
+        out.setframerate(rate)
+        out.writeframes(np.ascontiguousarray(channel).tobytes())
+
+
 def label_session(cfg: dict, session_dir: Path) -> bool:
     """Returns True if any speaker was labeled."""
     emb_path = session_dir / "embeddings.npz"
@@ -55,6 +75,7 @@ def label_session(cfg: dict, session_dir: Path) -> bool:
         return False
 
     sys_wav = session_dir / "track_sys.wav"
+    flac = session_dir / "audio.flac"
     excerpt_dir = session_dir / "excerpts"
     excerpt_dir.mkdir(exist_ok=True)
     db = VoiceprintDB(data_dir() / "voiceprints.db")
@@ -70,14 +91,17 @@ def label_session(cfg: dict, session_dir: Path) -> bool:
                 out = excerpt_dir / f"{speaker}_{i}.wav"
                 if sys_wav.exists():
                     _extract_excerpt(sys_wav, seg["start"], seg["end"], out)
-                    print(f"  Playing excerpt {i} "
-                          f"[{seg['start']:.0f}s–{seg['end']:.0f}s] ...")
-                    try:
-                        winsound.PlaySound(str(out), winsound.SND_FILENAME)
-                    except RuntimeError:
-                        print(f"  (playback failed — listen to {out})")
+                elif flac.exists():
+                    _extract_excerpt_flac(flac, seg["start"], seg["end"], out)
                 else:
-                    print(f"  (track_sys.wav missing — no audio to play)")
+                    print("  (no audio file found — cannot play excerpts)")
+                    break
+                print(f"  Playing excerpt {i} "
+                      f"[{seg['start']:.0f}s–{seg['end']:.0f}s] ...")
+                try:
+                    winsound.PlaySound(str(out), winsound.SND_FILENAME)
+                except RuntimeError:
+                    print(f"  (playback failed — listen to {out})")
             name = input(f"Name for {speaker} (empty = skip): ").strip()
             if name:
                 db.add(name, embeddings[speaker])

@@ -34,8 +34,16 @@ DEFAULTS: dict = {
         "ollama_url": "http://localhost:11434",
         "anthropic_model": "claude-sonnet-5",
     },
-    "output": {"dir": "~/Reunioes"},
+    "output": {"dir": "~/Reunioes", "keep_wav": False},
     "telegram": {"enabled": True, "send_full_transcript": False},
+    "notifications": {
+        # "recording started" is intentionally NOT configurable: the user
+        # must always know when recording begins
+        "recording_stopped": True,
+        "processing_done": True,
+        "speakers_unlabeled": True,
+        "errors": True,
+    },
 }
 
 

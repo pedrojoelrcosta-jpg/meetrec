@@ -35,7 +35,15 @@ summary:
 
 output:
   dir: ~/Reunioes
+  keep_wav: false            # raw track WAVs are deleted once audio.flac and
+                             # the transcripts exist (saves ~120 MB per hour)
 
 telegram:
   enabled: true
   send_full_transcript: false  # the transcript only leaves the machine if true
+
+notifications:                 # "recording started" is always on, by design
+  recording_stopped: true
+  processing_done: true
+  speakers_unlabeled: true
+  errors: true

@@ -24,15 +24,98 @@ def _session_dir(cfg: dict, name: str) -> Path:
 
 # -- commands ----------------------------------------------------------------
 
+def _setup_logging() -> None:
+    from logging.handlers import RotatingFileHandler
+    fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    console = logging.StreamHandler()
+    console.setFormatter(fmt)
+    root.addHandler(console)
+    file_handler = RotatingFileHandler(
+        data_dir() / "meetrec.log", maxBytes=2_000_000, backupCount=3,
+        encoding="utf-8")
+    file_handler.setFormatter(fmt)
+    root.addHandler(file_handler)
+
+
 def cmd_start(cfg: dict, args) -> None:
     from .daemon import Daemon, read_state
     state = read_state()
     if state and _pid_alive(state["pid"]):
         sys.exit(f"Daemon already running (pid {state['pid']})")
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    _setup_logging()
     Daemon(cfg).run()
+
+
+def cmd_record(cfg: dict, args) -> None:
+    """Manual recording, independent of meeting detection — e.g. in-person
+    meetings. Enter stops and processing starts right away."""
+    from . import notify
+    from .audio_capture import DualTrackRecorder
+    from .pipeline import new_session_dir, process_session
+    _setup_logging()
+    recorder = DualTrackRecorder(new_session_dir(cfg))
+    recorder.start()
+    notify.recording_started({"manual recording"})
+    print(f"Recording to {recorder.session_dir}")
+    input("Press Enter to stop...\n")
+    stats = recorder.stop()
+    print(f"Recorded {stats['duration_s']}s. Processing...")
+    import json as _json
+    (recorder.session_dir / "meta.json").write_text(
+        _json.dumps({"date": recorder.session_dir.name,
+                     "duration_s": stats["duration_s"], "tracks": stats,
+                     "manual": True}, ensure_ascii=False, indent=2),
+        encoding="utf-8")
+    process_session(cfg, recorder.session_dir)
+    print(f"Done: {recorder.session_dir}")
+
+
+def cmd_list(cfg: dict, args) -> None:
+    out_dir = Path(cfg["output"]["dir"])
+    if not out_dir.exists():
+        print(f"No sessions yet ({out_dir} does not exist).")
+        return
+    sessions = sorted(d for d in out_dir.iterdir() if d.is_dir())
+    if not sessions:
+        print("No sessions yet.")
+        return
+    for session in sessions:
+        meta_path = session / "meta.json"
+        if meta_path.exists():
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            duration = int(meta.get("duration_s") or 0)
+            state = "ok" if (session / "resumo.md").exists() else (
+                "no summary" if (session / "transcricao.txt").exists()
+                else "unprocessed")
+            speakers = ", ".join(meta.get("speakers", [])) or "-"
+            print(f"  {session.name}  {duration // 60:3d}min  "
+                  f"lang={meta.get('language', '?')}  [{state}]  {speakers}")
+        else:
+            print(f"  {session.name}  (no metadata — unprocessed)")
+
+
+def cmd_summary(cfg: dict, args) -> None:
+    """Regenerate (and optionally resend) just the summary of a session."""
+    from . import telegram
+    from .summarize import summarize
+    session_dir = _session_dir(cfg, args.session)
+    transcript = session_dir / "transcricao.txt"
+    if not transcript.exists():
+        sys.exit("Session has no transcript yet — run reprocess first.")
+    if args.backend:
+        cfg["summary"]["backend"] = args.backend
+    meta = json.loads((session_dir / "meta.json").read_text(encoding="utf-8"))
+    lang_cfg = args.language or cfg["summary"].get("language", "auto")
+    language = meta.get("language", "en") if lang_cfg == "auto" else lang_cfg
+    text = summarize(cfg, language, transcript.read_text(encoding="utf-8"))
+    (session_dir / "resumo.md").write_text(text, encoding="utf-8")
+    print(f"Summary written ({cfg['summary']['backend']}, {language}).")
+    if args.resend:
+        telegram.deliver(cfg, session_dir, text,
+                         f"Meeting {session_dir.name}")
+        print("Sent to Telegram.")
 
 
 def cmd_stop(cfg: dict, args) -> None:
@@ -48,7 +131,7 @@ def cmd_stop(cfg: dict, args) -> None:
 
 
 def cmd_status(cfg: dict, args) -> None:
-    from .daemon import pause_path, read_state
+    from .daemon import is_paused, read_state
     state = read_state()
     if not state or not _pid_alive(state["pid"]):
         print("Daemon: not running")
@@ -59,17 +142,41 @@ def cmd_status(cfg: dict, args) -> None:
               f"heartbeat {age:.0f}s ago")
         if state.get("recording_dir"):
             print(f"Recording to: {state['recording_dir']}")
-    print(f"Paused flag: {'yes' if pause_path().exists() else 'no'}")
+    print(f"Paused: {'yes' if is_paused() else 'no'}")
     print(f"Output dir: {cfg['output']['dir']}")
+    log_path = data_dir() / "meetrec.log"
+    if log_path.exists():
+        lines = log_path.read_text(encoding="utf-8",
+                                   errors="replace").splitlines()[-5:]
+        if lines:
+            print("Recent log:")
+            for line in lines:
+                print(f"  {line}")
+
+
+def _parse_duration(text: str) -> float:
+    """'90m', '2h', '1h30m' → seconds."""
+    import re
+    matches = re.findall(r"(\d+)\s*([hm])", text.lower())
+    if not matches or re.sub(r"[\dhm\s]", "", text.lower()):
+        raise ValueError(f"Invalid duration: {text!r} (use e.g. 30m, 2h, 1h30m)")
+    return sum(int(n) * (3600 if unit == "h" else 60) for n, unit in matches)
 
 
 def cmd_pause(cfg: dict, args) -> None:
+    from datetime import timedelta
     from .daemon import pause_path
-    if pause_path().exists():
+    if args.duration:
+        seconds = _parse_duration(args.duration)
+        expiry = datetime.now() + timedelta(seconds=seconds)
+        pause_path().write_text(f"until {expiry.isoformat()}", encoding="utf-8")
+        print(f"Paused until {expiry:%H:%M} — then recording resumes "
+              "automatically.")
+    elif pause_path().exists():
         pause_path().unlink()
         print("Resumed — new meetings will be recorded.")
     else:
-        pause_path().write_text(datetime.now().isoformat(), encoding="utf-8")
+        pause_path().write_text("manual", encoding="utf-8")
         print("Paused — new meetings will NOT be recorded "
               "(run `meetrec pause` again to resume).")
 
@@ -240,7 +347,22 @@ def main() -> None:
     sub.add_parser("start", help="run the daemon (foreground)")
     sub.add_parser("stop", help="stop a running daemon")
     sub.add_parser("status", help="show daemon state")
-    sub.add_parser("pause", help="toggle pause (skip new meetings)")
+
+    p = sub.add_parser("pause", help="toggle pause (skip new meetings)")
+    p.add_argument("--for", dest="duration", metavar="DURATION",
+                   help="auto-resume after e.g. 30m, 2h, 1h30m")
+
+    sub.add_parser("record",
+                   help="record manually now (Enter stops), then process")
+    sub.add_parser("list", help="list sessions and their processing state")
+
+    p = sub.add_parser("summary",
+                       help="regenerate just the summary of a session")
+    p.add_argument("session", help="session dir (name or full path)")
+    p.add_argument("--backend", choices=["gemini", "ollama", "anthropic"])
+    p.add_argument("--language", help="force summary language (e.g. pt, en)")
+    p.add_argument("--resend", action="store_true",
+                   help="also send the new summary to Telegram")
 
     p = sub.add_parser("reprocess", help="re-run processing on a session")
     p.add_argument("session", help="session dir (name or full path)")
@@ -264,8 +386,9 @@ def main() -> None:
     cfg = load_config()
     handlers = {
         "start": cmd_start, "stop": cmd_stop, "status": cmd_status,
-        "pause": cmd_pause, "reprocess": cmd_reprocess, "label": cmd_label,
-        "speakers": cmd_speakers, "doctor": cmd_doctor,
+        "pause": cmd_pause, "record": cmd_record, "list": cmd_list,
+        "summary": cmd_summary, "reprocess": cmd_reprocess,
+        "label": cmd_label, "speakers": cmd_speakers, "doctor": cmd_doctor,
         "test-telegram": cmd_test_telegram, "autostart": cmd_autostart,
     }
     handlers[args.command](cfg, args)

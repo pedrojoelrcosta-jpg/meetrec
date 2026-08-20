@@ -181,8 +181,14 @@ Test the Telegram pair with `meetrec test-telegram`.
 ```
 meetrec start            # run the daemon (foreground)
 meetrec stop             # stop a running daemon
-meetrec status           # daemon state, current recording, heartbeat
+meetrec status           # daemon state, current recording, recent log lines
 meetrec pause            # toggle: skip new meetings until toggled back
+meetrec pause --for 2h   # pause with automatic resume (30m, 2h, 1h30m, ...)
+meetrec record           # record manually right now (Enter stops) — for
+                         #   in-person meetings or apps detection misses
+meetrec list             # all sessions with duration/language/state/speakers
+meetrec summary <dir>    # regenerate just the summary (--backend, --language,
+                         #   --resend to push the new one to Telegram)
 meetrec reprocess <dir>  # re-run processing on a session (--full = from scratch)
 meetrec label <dir>      # play excerpts of unknown speakers and name them
 meetrec speakers         # list known voices (--rename OLD NEW | --delete NAME)
@@ -242,6 +248,8 @@ code, so a missing key just falls back.
 | `summary.ollama_model` | `gemma3:4b` | Local model — small, strong multilingual, CPU-friendly |
 | `summary.ollama_url` | `http://localhost:11434` | Ollama endpoint |
 | `output.dir` | `~/Reunioes` | Where session folders are created |
+| `output.keep_wav` | `false` | Keep the raw per-track WAVs after the FLAC mix (they cost ~120 MB/h; `label` works from the FLAC either way) |
+| `notifications.*` | all `true` | Per-event toast toggles (`recording_stopped`, `processing_done`, `speakers_unlabeled`, `errors`). The recording-start toast is not configurable by design |
 | `telegram.enabled` | `true` | Master switch for Telegram delivery |
 | `telegram.send_full_transcript` | `false` | The transcript only leaves the machine if you set this to `true` |
 
@@ -305,7 +313,9 @@ exists so *you* are always aware; it does not notify the other side.
   deliveries are queued in `%LOCALAPPDATA%\meetrec\telegram_queue` and
   retried on the next processing run or daemon start; nothing is lost.
 - **Recording survived a crash?** — tracks are written incrementally, so the
-  WAVs up to the crash moment are on disk; run `meetrec reprocess <dir>`.
+  audio up to the crash moment is on disk. The daemon re-queues any
+  recorded-but-unprocessed session automatically at startup; you can also
+  run `meetrec reprocess <dir>` yourself.
 
 ## Development
 

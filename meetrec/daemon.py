@@ -37,6 +37,43 @@ def pause_path() -> Path:
     return data_dir() / PAUSE_FILE
 
 
+def is_paused() -> bool:
+    """True while the pause flag exists. A flag holding an ISO timestamp
+    expires automatically (see `meetrec pause --for`)."""
+    path = pause_path()
+    if not path.exists():
+        return False
+    content = path.read_text(encoding="utf-8").strip()
+    if content.startswith("until "):
+        from datetime import datetime
+        try:
+            expiry = datetime.fromisoformat(content[len("until "):])
+            if datetime.now() >= expiry:
+                path.unlink(missing_ok=True)
+                log.info("Pause expired — resuming")
+                return False
+        except ValueError:
+            pass  # malformed flag counts as a plain manual pause
+    return True
+
+
+def find_unprocessed_sessions(cfg: dict) -> list[Path]:
+    """Sessions with recorded audio but no transcript — e.g. after a crash
+    mid-processing or mid-recording. Picked up again at daemon start."""
+    out_dir = Path(cfg["output"]["dir"])
+    if not out_dir.exists():
+        return []
+    pending = []
+    for session in sorted(out_dir.iterdir()):
+        if not session.is_dir():
+            continue
+        has_audio = any((session / n).exists() for n in
+                        ("track_mic.wav", "track_sys.wav", "audio.flac"))
+        if has_audio and not (session / "transcricao.txt").exists():
+            pending.append(session)
+    return pending
+
+
 def read_state() -> dict | None:
     path = state_path()
     if not path.exists():
@@ -66,7 +103,7 @@ class Daemon:
     # -- detector callbacks -------------------------------------------------
 
     def _on_started(self, apps: set[str]) -> None:
-        if pause_path().exists():
+        if is_paused():
             log.info("Meeting detected but daemon is paused; not recording")
             return
         log.info("Meeting started: %s", apps)
@@ -82,7 +119,8 @@ class Daemon:
         recorder, self.recorder = self.recorder, None
         stats = recorder.stop()
         log.info("Meeting ended: %s", stats)
-        notify.recording_stopped(stats["duration_s"])
+        if self.cfg.get("notifications", {}).get("recording_stopped", True):
+            notify.recording_stopped(stats["duration_s"])
 
         min_s = self.cfg["audio"]["min_session_s"]
         if stats["duration_s"] < min_s:
@@ -135,6 +173,9 @@ class Daemon:
         telegram.flush_queue()
         worker = threading.Thread(target=self._worker, daemon=True)
         worker.start()
+        for session in find_unprocessed_sessions(self.cfg):
+            log.info("Recovering unprocessed session %s", session.name)
+            self._work.put(session)
         self._write_state()
         try:
             last_beat = 0.0

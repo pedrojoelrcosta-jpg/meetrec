@@ -212,9 +212,20 @@ def process_session(cfg: dict, session_dir: Path,
         except telegram.TelegramNotConfigured as exc:
             log.warning("%s", exc)
 
+    # 7. optional cleanup of the raw WAV tracks (only when the FLAC and the
+    # transcripts are safely on disk; `label` falls back to audio.flac)
+    if not cfg["output"].get("keep_wav", False):
+        if ((session_dir / "audio.flac").exists()
+                and (session_dir / "transcricao.txt").exists()):
+            for name in ("track_mic.wav", "track_sys.wav"):
+                (session_dir / name).unlink(missing_ok=True)
+            log.info("Raw WAV tracks removed (output.keep_wav=false)")
+
+    notif_cfg = cfg.get("notifications", {})
     if with_notifications:
-        notify.processing_done(session_dir)
-        if unknown_count:
+        if notif_cfg.get("processing_done", True):
+            notify.processing_done(session_dir)
+        if unknown_count and notif_cfg.get("speakers_unlabeled", True):
             notify.speakers_unlabeled(session_dir, unknown_count)
     log.info("Done in %.0fs", meta["processing_s"])
 

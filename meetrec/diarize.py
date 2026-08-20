@@ -46,13 +46,21 @@ def _require_token() -> str:
     return token
 
 
+def _from_pretrained(cls, model: str, token: str):
+    """pyannote.audio 4.x takes token=, 3.x takes use_auth_token=."""
+    try:
+        return cls.from_pretrained(model, token=token)
+    except TypeError:
+        return cls.from_pretrained(model, use_auth_token=token)
+
+
 def diarize_track(wav_path: Path) -> list[dict]:
     """[{speaker: 'SPEAKER_00', start, end}] sorted by start."""
     import torch
     from pyannote.audio import Pipeline
 
     token = _require_token()
-    pipeline = Pipeline.from_pretrained(DIARIZATION_MODEL, use_auth_token=token)
+    pipeline = _from_pretrained(Pipeline, DIARIZATION_MODEL, token)
     if torch.cuda.is_available():
         pipeline.to(torch.device("cuda"))
     log.info("Diarizing %s ...", wav_path.name)
@@ -74,7 +82,9 @@ def speaker_embeddings(wav_path: Path, turns: list[dict]) -> dict[str, np.ndarra
     from pyannote.core import Segment
 
     token = _require_token()
-    inference = Inference(EMBEDDING_MODEL, window="whole", use_auth_token=token)
+    from pyannote.audio import Model
+    model = _from_pretrained(Model, EMBEDDING_MODEL, token)
+    inference = Inference(model, window="whole")
 
     by_speaker: dict[str, list[dict]] = {}
     for turn in turns:

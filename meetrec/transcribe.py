@@ -12,6 +12,27 @@ log = logging.getLogger(__name__)
 
 _model_cache: dict = {}
 
+# Whisper's classic failure mode on noise/silence is looping the same
+# phrase. Keep at most this many consecutive identical segments.
+MAX_CONSECUTIVE_REPEATS = 2
+
+
+def collapse_repetitions(segments: list[dict]) -> list[dict]:
+    """Drop hallucinated loops: runs of the same normalized text beyond
+    MAX_CONSECUTIVE_REPEATS are collapsed (keeping the first occurrences)."""
+    result: list[dict] = []
+    run_text, run_len = None, 0
+    for seg in segments:
+        normalized = seg["text"].casefold().strip(" .,!?…")
+        if normalized and normalized == run_text:
+            run_len += 1
+            if run_len > MAX_CONSECUTIVE_REPEATS:
+                continue
+        else:
+            run_text, run_len = normalized, 1
+        result.append(seg)
+    return result
+
 
 def resolve_device(cfg: dict) -> tuple[str, str]:
     """(device, compute_type) honoring 'auto' in config."""
@@ -68,6 +89,7 @@ def transcribe_track(cfg: dict, wav_path: Path) -> dict:
                 for w in (seg.words or [])
             ],
         })
+    segments = collapse_repetitions(segments)
     log.info("%s: %d segments, language=%s (p=%.2f)",
              wav_path.name, len(segments), info.language,
              info.language_probability)

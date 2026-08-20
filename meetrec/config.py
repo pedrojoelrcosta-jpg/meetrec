@@ -33,6 +33,11 @@ DEFAULTS: dict = {
         "ignore_apps": [
             "SoundRecorder.exe",
             "Microsoft.WindowsSoundRecorder_8wekyb3d8bbwe",
+            # meetrec itself records through python — without these, a manual
+            # `meetrec record` would trigger the daemon into a duplicate
+            # recording of the same meeting
+            "python.exe",
+            "pythonw.exe",
         ],
     },
     "audio": {

@@ -1,0 +1,23 @@
+# Logic tests only: the detector state machine, voiceprint matching, merge,
+# message splitting and the debug recorder are all testable without audio
+# hardware or the heavy ML dependencies (torch/pyannote/faster-whisper are
+# imported lazily), so CI stays fast.
+name: tests
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install test dependencies
+        run: pip install pytest numpy pyyaml python-dotenv requests soundfile
+      - name: Run tests
+        run: python -m pytest tests/ -v

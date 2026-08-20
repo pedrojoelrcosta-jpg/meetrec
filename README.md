@@ -3,6 +3,10 @@
 **Automatic meeting recording, transcription, speaker identification and
 summarization for Windows 11 — with 100% local audio processing.**
 
+![tests](https://github.com/pedrojoelrcosta-jpg/meetrec/actions/workflows/ci.yml/badge.svg)
+![license](https://img.shields.io/badge/license-MIT-green)
+![python](https://img.shields.io/badge/python-3.11%2B-blue)
+
 No cloud speech-to-text. No browser extensions. No virtual audio cables.
 A background daemon notices when you are in a meeting (Google Meet, Microsoft
 Teams, Zoom — any app that captures the microphone), records both sides of
@@ -347,7 +351,8 @@ The detector state machine is tested with an injected fake scanner and fake
 clock, and voiceprint matching with synthetic embedding vectors — no real
 meetings (or GPUs) needed for the logic tests. `diagnose_mic.py` is
 stdlib-only on purpose, so detection can be validated before installing
-anything.
+anything. CI runs the logic tests on `windows-latest` — the heavy ML
+dependencies are imported lazily, so the suite needs only the light ones.
 
 Project layout:
 
@@ -372,3 +377,7 @@ meetrec/
     ├── daemon.py          # detector → recorder → pipeline wiring
     └── cli.py             # the `meetrec` command
 ```
+
+## License
+
+[MIT](LICENSE)

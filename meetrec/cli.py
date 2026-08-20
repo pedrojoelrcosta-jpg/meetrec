@@ -330,7 +330,10 @@ def cmd_reprocess(cfg: dict, args) -> None:
                      "debug.json"):
             (session_dir / name).unlink(missing_ok=True)
     _setup_logging(_log_level(cfg, args))
-    process_session(cfg, session_dir, with_notifications=False)
+    # reprocessing can take a long while on CPU — notify completion/issues
+    # by default so the user can walk away (--quiet to suppress)
+    process_session(cfg, session_dir,
+                    with_notifications=not args.quiet)
     _print_outputs(session_dir)
 
 
@@ -574,6 +577,8 @@ def main() -> None:
     p.add_argument("session", help="session dir (name or full path)")
     p.add_argument("--full", action="store_true",
                    help="discard intermediates and redo everything")
+    p.add_argument("--quiet", action="store_true",
+                   help="no Windows notifications when done")
 
     p = sub.add_parser("label", help="name unknown speakers in a session")
     p.add_argument("session", help="session dir (name or full path)")

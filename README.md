@@ -119,12 +119,22 @@ explicitly enable `telegram.send_full_transcript`.
 
 ## Installation
 
+One-shot installer — creates the venv, installs everything, then walks you
+through keys and preferences interactively (`meetrec setup`), including
+detecting your Telegram chat id automatically:
+
 ```powershell
 git clone https://github.com/pedrojoelrcosta-jpg/meetrec
 cd meetrec
+powershell -ExecutionPolicy Bypass -File install.ps1
+```
+
+Manual route, if you prefer:
+
+```powershell
 py -3.11 -m venv .venv
 .venv\Scripts\pip install -e .
-copy .env.example .env     # then fill it in — see "API keys and .env"
+.venv\Scripts\meetrec setup      # or: copy .env.example .env and edit it
 .venv\Scripts\meetrec doctor
 ```
 
@@ -192,7 +202,10 @@ meetrec summary <dir>    # regenerate just the summary (--backend, --language,
 meetrec reprocess <dir>  # re-run processing on a session (--full = from scratch)
 meetrec label <dir>      # play excerpts of unknown speakers and name them
 meetrec speakers         # list known voices (--rename OLD NEW | --delete NAME)
+meetrec setup            # re-run the interactive wizard anytime
 meetrec doctor           # validate the whole setup
+meetrec debug <dir>      # session x-ray: stage timings, recorded issues,
+                         #   capture errors (--traceback for full detail)
 meetrec test-telegram    # send a test message to your chat
 meetrec autostart on     # create a Task Scheduler job that starts meetrec at
                          #   logon (meetrec autostart off removes it)
@@ -250,6 +263,8 @@ code, so a missing key just falls back.
 | `output.dir` | `~/Reunioes` | Where session folders are created |
 | `output.keep_wav` | `false` | Keep the raw per-track WAVs after the FLAC mix (they cost ~120 MB/h; `label` works from the FLAC either way) |
 | `notifications.*` | all `true` | Per-event toast toggles (`recording_stopped`, `processing_done`, `speakers_unlabeled`, `errors`). The recording-start toast is not configurable by design |
+| `debug.level` | `info` | `debug` for verbose logs (or `--debug` on any command) |
+| `debug.strict` | `false` | `true` makes pipeline stage errors raise immediately instead of being recorded in the session's `debug.json` and skipped — use while debugging |
 | `telegram.enabled` | `true` | Master switch for Telegram delivery |
 | `telegram.send_full_transcript` | `false` | The transcript only leaves the machine if you set this to `true` |
 

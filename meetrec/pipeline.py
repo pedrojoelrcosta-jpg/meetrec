@@ -134,83 +134,101 @@ def regenerate_transcripts(session_dir: Path) -> dict:
 
 def process_session(cfg: dict, session_dir: Path,
                     with_notifications: bool = True) -> None:
-    """Full processing of a recorded session directory."""
+    """Full processing of a recorded session directory.
+
+    Every stage is timed and its outcome persisted to debug.json (see
+    debuglog). Non-fatal failures never lose the transcript, but they are
+    never silent either: they count as issues, show up in `meetrec list`
+    and `meetrec debug`, and change the final notification.
+    """
+    from .debuglog import StageRecorder
+
     started = time.time()
     log.info("Processing %s", session_dir)
+    rec = StageRecorder(session_dir,
+                        strict=cfg.get("debug", {}).get("strict", False))
 
     mic_wav = session_dir / "track_mic.wav"
     sys_wav = session_dir / "track_sys.wav"
 
-    # 1. transcription (both tracks, separately)
+    # 1. transcription (both tracks, separately). Fatal: without it there
+    # is nothing downstream to work with.
     for wav, out_name in ((mic_wav, "transcript_mic.json"),
                           (sys_wav, "transcript_sys.json")):
         out = session_dir / out_name
-        if wav.exists() and not out.exists():
-            _write_json(out, transcribe_track(cfg, wav))
+        stage_name = f"transcribe_{wav.stem.split('_')[-1]}"
+        if not wav.exists() and not out.exists():
+            rec.skip(stage_name, f"{wav.name} not found")
+            continue
+        if out.exists():
+            rec.skip(stage_name, "already transcribed")
+            continue
+        with rec.stage(stage_name, fatal=True):
+            result = transcribe_track(cfg, wav)
+            _write_json(out, result)
+            rec.note(stage_name, language=result["language"],
+                     segments=len(result["segments"]))
 
     # 2. diarization + speaker identity (system track only; mic is MYSELF)
     unknown_count = 0
-    if sys_wav.exists():
-        try:
-            diar_path = session_dir / "diarization.json"
-            if not diar_path.exists():
-                _write_json(diar_path, diarize_track(sys_wav))
-            turns = _read_json(diar_path)
+    if not sys_wav.exists() and not (session_dir / "diarization.json").exists():
+        rec.skip("diarization", "track_sys.wav not found")
+    else:
+        with rec.stage("diarization"):
+            try:
+                diar_path = session_dir / "diarization.json"
+                if not diar_path.exists():
+                    _write_json(diar_path, diarize_track(sys_wav))
+                turns = _read_json(diar_path)
 
-            sys_tr = _read_json(session_dir / "transcript_sys.json")
-            assign_speakers_to_segments(sys_tr["segments"], turns)
-            _write_json(session_dir / "transcript_sys.json", sys_tr)
+                sys_tr = _read_json(session_dir / "transcript_sys.json")
+                assign_speakers_to_segments(sys_tr["segments"], turns)
+                _write_json(session_dir / "transcript_sys.json", sys_tr)
 
-            mapping = _identify_speakers(cfg, session_dir, turns)
-            _write_json(session_dir / "speaker_map.json", mapping)
-            all_speakers = {t["speaker"] for t in turns}
-            unknown_count = len(all_speakers - set(mapping))
-        except HFTokenMissing as exc:
-            log.error("%s", exc)
-            if with_notifications:
-                notify.error("Diarization skipped: HF_TOKEN not configured")
-        except Exception:
-            log.exception("Diarization failed; continuing without speakers")
+                mapping = _identify_speakers(cfg, session_dir, turns)
+                _write_json(session_dir / "speaker_map.json", mapping)
+                all_speakers = {t["speaker"] for t in turns}
+                unknown_count = len(all_speakers - set(mapping))
+                rec.note("diarization", speakers=len(all_speakers),
+                         recognized=len(mapping))
+            except HFTokenMissing:
+                if with_notifications:
+                    notify.error("Diarization skipped: HF_TOKEN not configured")
+                raise
 
-    # 3. chronological merge + output documents
-    result = regenerate_transcripts(session_dir)
-    meta = result["meta"]
+    # 3. chronological merge + output documents (fatal: this IS the product)
+    with rec.stage("merge", fatal=True):
+        result = regenerate_transcripts(session_dir)
+        meta = result["meta"]
 
     # 4. FLAC with both tracks (mic=left, system=right)
-    try:
-        if not (session_dir / "audio.flac").exists():
+    if (session_dir / "audio.flac").exists():
+        rec.skip("flac_mix", "audio.flac already exists")
+    else:
+        with rec.stage("flac_mix"):
             _mix_to_flac(session_dir)
-    except Exception:
-        log.exception("FLAC mix failed; WAV tracks kept")
 
-    # 5. summary in the detected language
+    # 5. summary in the detected (or forced) language
     summary_text = None
-    try:
+    with rec.stage("summary"):
         transcript_text = (session_dir / "transcricao.txt") \
             .read_text(encoding="utf-8")
-        # summary.language: auto = language detected in the meeting; pt/en force
         lang_cfg = cfg["summary"].get("language", "auto")
         summary_lang = meta["language"] if lang_cfg == "auto" else lang_cfg
         summary_text = summarize(cfg, summary_lang, transcript_text)
         (session_dir / "resumo.md").write_text(summary_text, encoding="utf-8")
-    except Exception:
-        log.exception("Summary failed; transcript is intact")
-        if with_notifications:
-            notify.error("Summary failed — transcript saved")
-
-    meta["processing_s"] = round(time.time() - started, 1)
-    meta["whisper_model"] = cfg["transcription"]["model"]
-    meta["summary_backend"] = cfg["summary"]["backend"]
-    _write_json(session_dir / "meta.json", meta)
+        rec.note("summary", language=summary_lang)
 
     # 6. delivery
-    telegram.flush_queue()
-    if summary_text:
-        try:
-            telegram.deliver(cfg, session_dir, summary_text,
-                             f"Meeting {session_dir.name}")
-        except telegram.TelegramNotConfigured as exc:
-            log.warning("%s", exc)
+    with rec.stage("telegram_delivery"):
+        telegram.flush_queue()
+        if summary_text is None:
+            rec.skip("telegram_delivery", "no summary to send")
+        else:
+            delivered = telegram.deliver(cfg, session_dir, summary_text,
+                                         f"Meeting {session_dir.name}")
+            rec.note("telegram_delivery",
+                     delivered="now" if delivered else "queued for retry")
 
     # 7. optional cleanup of the raw WAV tracks (only when the FLAC and the
     # transcripts are safely on disk; `label` falls back to audio.flac)
@@ -221,13 +239,20 @@ def process_session(cfg: dict, session_dir: Path,
                 (session_dir / name).unlink(missing_ok=True)
             log.info("Raw WAV tracks removed (output.keep_wav=false)")
 
+    meta["processing_s"] = round(time.time() - started, 1)
+    meta["whisper_model"] = cfg["transcription"]["model"]
+    meta["summary_backend"] = cfg["summary"]["backend"]
+    meta["issues"] = rec.issue_count
+    _write_json(session_dir / "meta.json", meta)
+
     notif_cfg = cfg.get("notifications", {})
     if with_notifications:
         if notif_cfg.get("processing_done", True):
-            notify.processing_done(session_dir)
+            notify.processing_done(session_dir, issues=rec.issue_count)
         if unknown_count and notif_cfg.get("speakers_unlabeled", True):
             notify.speakers_unlabeled(session_dir, unknown_count)
-    log.info("Done in %.0fs", meta["processing_s"])
+    log.info("Done in %.0fs (%d issue(s))",
+             meta["processing_s"], rec.issue_count)
 
 
 def new_session_dir(cfg: dict) -> Path:

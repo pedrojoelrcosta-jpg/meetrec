@@ -36,6 +36,11 @@ DEFAULTS: dict = {
     },
     "output": {"dir": "~/Reunioes", "keep_wav": False},
     "telegram": {"enabled": True, "send_full_transcript": False},
+    "debug": {
+        "level": "info",    # info | debug — logging verbosity
+        "strict": False,    # True: pipeline stage errors raise instead of
+                            # being recorded-and-skipped (for debugging)
+    },
     "notifications": {
         # "recording started" is intentionally NOT configurable: the user
         # must always know when recording begins

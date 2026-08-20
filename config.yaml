@@ -42,6 +42,11 @@ telegram:
   enabled: true
   send_full_transcript: false  # the transcript only leaves the machine if true
 
+debug:
+  level: info                  # info | debug (or run any command with --debug)
+  strict: false                # true: pipeline errors raise instead of being
+                               # recorded in debug.json and skipped
+
 notifications:                 # "recording started" is always on, by design
   recording_stopped: true
   processing_done: true

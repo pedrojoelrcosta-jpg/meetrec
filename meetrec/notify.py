@@ -62,8 +62,13 @@ def recording_stopped(duration_s: float) -> None:
     _show("Recording finished", f"{minutes} min captured. Processing…")
 
 
-def processing_done(session_dir: Path) -> None:
-    _show("Meeting processed", f"Result in {session_dir.name}",
+def processing_done(session_dir: Path, issues: int = 0) -> None:
+    # an honest notification: partial failures are surfaced, not hidden
+    body = (f"Result in {session_dir.name}" if not issues else
+            f"{session_dir.name}: done with {issues} issue(s) — "
+            f"run: meetrec debug {session_dir.name}")
+    title = "Meeting processed" if not issues else "Meeting processed (issues)"
+    _show(title, body,
           buttons=[("Open folder", lambda: open_folder(session_dir))])
 
 

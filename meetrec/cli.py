@@ -24,11 +24,11 @@ def _session_dir(cfg: dict, name: str) -> Path:
 
 # -- commands ----------------------------------------------------------------
 
-def _setup_logging() -> None:
+def _setup_logging(level: int = logging.INFO) -> None:
     from logging.handlers import RotatingFileHandler
     fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
     root = logging.getLogger()
-    root.setLevel(logging.INFO)
+    root.setLevel(level)
     console = logging.StreamHandler()
     console.setFormatter(fmt)
     root.addHandler(console)
@@ -39,13 +39,85 @@ def _setup_logging() -> None:
     root.addHandler(file_handler)
 
 
+def _log_level(cfg: dict, args) -> int:
+    if getattr(args, "debug", False) \
+            or cfg.get("debug", {}).get("level") == "debug":
+        return logging.DEBUG
+    return logging.INFO
+
+
+def cmd_setup(cfg: dict, args) -> None:
+    from .setup_wizard import run_wizard
+    run_wizard(cfg)
+
+
 def cmd_start(cfg: dict, args) -> None:
     from .daemon import Daemon, read_state
     state = read_state()
     if state and _pid_alive(state["pid"]):
         sys.exit(f"Daemon already running (pid {state['pid']})")
-    _setup_logging()
+    _setup_logging(_log_level(cfg, args))
     Daemon(cfg).run()
+
+
+def cmd_debug(cfg: dict, args) -> None:
+    """X-ray of one session: artifacts, stage outcomes, recorded issues."""
+    from .debuglog import load_debug
+    session_dir = _session_dir(cfg, args.session)
+    print(f"Session {session_dir}\n")
+
+    print("Artifacts:")
+    for name in ("track_mic.wav", "track_sys.wav", "audio.flac",
+                 "transcript_mic.json", "transcript_sys.json",
+                 "diarization.json", "embeddings.npz", "speaker_map.json",
+                 "transcricao.txt", "transcricao.md", "resumo.md",
+                 "meta.json", "debug.json"):
+        path = session_dir / name
+        size = f"{path.stat().st_size:,} B" if path.exists() else "missing"
+        print(f"  {'[x]' if path.exists() else '[ ]'} {name:<22} {size}")
+
+    meta_path = session_dir / "meta.json"
+    if meta_path.exists():
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        tracks = meta.get("tracks", {})
+        for side in ("mic", "sys"):
+            err = (tracks.get(side) or {}).get("error")
+            if err:
+                print(f"\nCapture error on {side} track: {err}")
+
+    data = load_debug(session_dir)
+    if not data:
+        print("\nNo debug.json — session was processed before debug "
+              "recording existed. Re-run: meetrec reprocess "
+              f"{session_dir.name}")
+        return
+    print("\nStages:")
+    for name, info in data.get("stages", {}).items():
+        if info.get("ok") is None:
+            status = f"skipped ({info.get('skipped', '?')})"
+        elif info["ok"]:
+            status = f"ok in {info.get('seconds', '?')}s"
+        else:
+            status = f"FAILED after {info.get('seconds', '?')}s"
+        extra = {k: v for k, v in info.items()
+                 if k not in ("ok", "seconds", "skipped", "error")}
+        print(f"  {name:<20} {status}"
+              + (f"  {extra}" if extra else ""))
+        if info.get("error"):
+            print(f"      {info['error']}")
+    issues = data.get("issues", [])
+    if issues:
+        print(f"\n{len(issues)} issue(s) recorded:")
+        for issue in issues:
+            print(f"  [{issue['at']}] {issue['stage']}: {issue['error']}")
+        if args.traceback:
+            for issue in issues:
+                print(f"\n--- {issue['stage']} traceback ---")
+                print(issue["traceback"])
+        else:
+            print("  (run with --traceback for full tracebacks)")
+    else:
+        print("\nNo issues recorded.")
 
 
 def cmd_record(cfg: dict, args) -> None:
@@ -89,6 +161,9 @@ def cmd_list(cfg: dict, args) -> None:
             state = "ok" if (session / "resumo.md").exists() else (
                 "no summary" if (session / "transcricao.txt").exists()
                 else "unprocessed")
+            issues = meta.get("issues", 0)
+            if issues:
+                state += f", {issues} issue(s)"
             speakers = ", ".join(meta.get("speakers", [])) or "-"
             print(f"  {session.name}  {duration // 60:3d}min  "
                   f"lang={meta.get('language', '?')}  [{state}]  {speakers}")
@@ -188,9 +263,9 @@ def cmd_reprocess(cfg: dict, args) -> None:
         # drop intermediates so every stage runs again
         for name in ("transcript_mic.json", "transcript_sys.json",
                      "diarization.json", "speaker_map.json",
-                     "embeddings.npz", "resumo.md"):
+                     "embeddings.npz", "resumo.md", "debug.json"):
             (session_dir / name).unlink(missing_ok=True)
-    logging.basicConfig(level=logging.INFO)
+    _setup_logging(_log_level(cfg, args))
     process_session(cfg, session_dir, with_notifications=False)
     print(f"Reprocessed {session_dir}")
 
@@ -342,7 +417,12 @@ def main() -> None:
         prog="meetrec",
         description="Automatic meeting recording, transcription and "
                     "diarization — 100% local audio processing.")
+    parser.add_argument("--debug", action="store_true",
+                        help="verbose DEBUG logging for this run")
     sub = parser.add_subparsers(dest="command", required=True)
+
+    sub.add_parser("setup", help="interactive first-run wizard: keys, "
+                                 "config, Telegram pairing, autostart")
 
     sub.add_parser("start", help="run the daemon (foreground)")
     sub.add_parser("stop", help="stop a running daemon")
@@ -379,17 +459,24 @@ def main() -> None:
     sub.add_parser("doctor", help="validate the whole setup")
     sub.add_parser("test-telegram", help="send a test message")
 
+    p = sub.add_parser("debug",
+                       help="inspect a session: stages, timings, issues")
+    p.add_argument("session", help="session dir (name or full path)")
+    p.add_argument("--traceback", action="store_true",
+                   help="print full tracebacks of recorded issues")
+
     p = sub.add_parser("autostart", help="enable/disable start at logon")
     p.add_argument("mode", choices=["on", "off"])
 
     args = parser.parse_args()
     cfg = load_config()
     handlers = {
-        "start": cmd_start, "stop": cmd_stop, "status": cmd_status,
-        "pause": cmd_pause, "record": cmd_record, "list": cmd_list,
-        "summary": cmd_summary, "reprocess": cmd_reprocess,
+        "setup": cmd_setup, "start": cmd_start, "stop": cmd_stop,
+        "status": cmd_status, "pause": cmd_pause, "record": cmd_record,
+        "list": cmd_list, "summary": cmd_summary, "reprocess": cmd_reprocess,
         "label": cmd_label, "speakers": cmd_speakers, "doctor": cmd_doctor,
-        "test-telegram": cmd_test_telegram, "autostart": cmd_autostart,
+        "debug": cmd_debug, "test-telegram": cmd_test_telegram,
+        "autostart": cmd_autostart,
     }
     handlers[args.command](cfg, args)
 

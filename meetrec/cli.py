@@ -190,11 +190,13 @@ def cmd_doctor(cfg: dict, args) -> None:
 
 
 def cmd_test_telegram(cfg: dict, args) -> None:
-    from .telegram import send_summary, test_connection
+    from .telegram import flush_queue, send_summary, test_connection
     username = test_connection()
     send_summary("meetrec test message — Telegram delivery works.",
                  "meetrec test")
-    print(f"Sent via bot @{username}. Check your Telegram.")
+    flushed = flush_queue()  # deliver anything queued while unconfigured/offline
+    print(f"Sent via bot @{username}. Check your Telegram."
+          + (f" ({flushed} queued message(s) delivered too)" if flushed else ""))
 
 
 def cmd_autostart(cfg: dict, args) -> None:

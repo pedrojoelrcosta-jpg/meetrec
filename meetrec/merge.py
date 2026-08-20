@@ -1,11 +1,13 @@
 """Chronological merge of the mic and system tracks into one document.
 
-The mic track is labeled "EU" (the user). System-track segments carry the
-speaker assigned by diarization/voiceprint matching. Consecutive blocks from
-the same speaker are merged when the gap is small.
+The mic track is labeled with `self_label` (the user — configurable, e.g.
+"ME" or "EU"). System-track segments carry the speaker assigned by
+diarization/voiceprint matching. Consecutive blocks from the same speaker
+are merged when the gap is small.
 """
 
 MERGE_GAP_S = 2.0
+DEFAULT_SELF_LABEL = "ME"
 
 
 def _fmt_ts(seconds: float) -> str:
@@ -13,12 +15,13 @@ def _fmt_ts(seconds: float) -> str:
     return f"{s // 3600:02d}:{(s % 3600) // 60:02d}:{s % 60:02d}"
 
 
-def merge_tracks(mic_segments: list[dict], sys_segments: list[dict]) -> list[dict]:
+def merge_tracks(mic_segments: list[dict], sys_segments: list[dict],
+                 self_label: str = DEFAULT_SELF_LABEL) -> list[dict]:
     """Return blocks [{speaker, start, end, text}] sorted by start time."""
     entries = []
     for seg in mic_segments:
         if seg["text"]:
-            entries.append({"speaker": "EU", "start": seg["start"],
+            entries.append({"speaker": self_label, "start": seg["start"],
                             "end": seg["end"], "text": seg["text"]})
     for seg in sys_segments:
         if seg["text"]:

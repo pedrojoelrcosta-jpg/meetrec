@@ -70,7 +70,7 @@ def cmd_debug(cfg: dict, args) -> None:
     for name in ("track_mic.wav", "track_sys.wav", "audio.flac",
                  "transcript_mic.json", "transcript_sys.json",
                  "diarization.json", "embeddings.npz", "speaker_map.json",
-                 "transcricao.txt", "transcricao.md", "resumo.md",
+                 "transcript.txt", "transcript.md", "summary.md",
                  "meta.json", "debug.json"):
         path = session_dir / name
         size = f"{path.stat().st_size:,} B" if path.exists() else "missing"
@@ -158,9 +158,12 @@ def cmd_list(cfg: dict, args) -> None:
         if meta_path.exists():
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
             duration = int(meta.get("duration_s") or 0)
-            state = "ok" if (session / "resumo.md").exists() else (
-                "no summary" if (session / "transcricao.txt").exists()
-                else "unprocessed")
+            from .config import (LEGACY_SUMMARY_MD, SUMMARY_MD,
+                                 find_transcript)
+            has_summary = any((session / n).exists()
+                              for n in (SUMMARY_MD, LEGACY_SUMMARY_MD))
+            state = "ok" if has_summary else (
+                "no summary" if find_transcript(session) else "unprocessed")
             issues = meta.get("issues", 0)
             if issues:
                 state += f", {issues} issue(s)"
@@ -174,10 +177,11 @@ def cmd_list(cfg: dict, args) -> None:
 def cmd_summary(cfg: dict, args) -> None:
     """Regenerate (and optionally resend) just the summary of a session."""
     from . import telegram
+    from .config import SUMMARY_MD, find_transcript
     from .summarize import summarize
     session_dir = _session_dir(cfg, args.session)
-    transcript = session_dir / "transcricao.txt"
-    if not transcript.exists():
+    transcript = find_transcript(session_dir)
+    if transcript is None:
         sys.exit("Session has no transcript yet — run reprocess first.")
     if args.backend:
         cfg["summary"]["backend"] = args.backend
@@ -185,7 +189,7 @@ def cmd_summary(cfg: dict, args) -> None:
     lang_cfg = args.language or cfg["summary"].get("language", "auto")
     language = meta.get("language", "en") if lang_cfg == "auto" else lang_cfg
     text = summarize(cfg, language, transcript.read_text(encoding="utf-8"))
-    (session_dir / "resumo.md").write_text(text, encoding="utf-8")
+    (session_dir / SUMMARY_MD).write_text(text, encoding="utf-8")
     print(f"Summary written ({cfg['summary']['backend']}, {language}).")
     if args.resend:
         telegram.deliver(cfg, session_dir, text,
@@ -263,7 +267,8 @@ def cmd_reprocess(cfg: dict, args) -> None:
         # drop intermediates so every stage runs again
         for name in ("transcript_mic.json", "transcript_sys.json",
                      "diarization.json", "speaker_map.json",
-                     "embeddings.npz", "resumo.md", "debug.json"):
+                     "embeddings.npz", "summary.md", "resumo.md",
+                     "debug.json"):
             (session_dir / name).unlink(missing_ok=True)
     _setup_logging(_log_level(cfg, args))
     process_session(cfg, session_dir, with_notifications=False)
@@ -371,6 +376,24 @@ def cmd_doctor(cfg: dict, args) -> None:
     sys.exit(0 if ok else 1)
 
 
+def cmd_cleanup(cfg: dict, args) -> None:
+    from .pipeline import cleanup_expired_audio
+    retention = cfg["output"].get("audio_retention_h", 0)
+    if not retention:
+        print("output.audio_retention_h is 0 — audio is kept forever. "
+              "Set e.g. 72 in config.yaml to expire audio after 72h.")
+        return
+    removed = cleanup_expired_audio(cfg, dry_run=args.dry_run)
+    if not removed:
+        print("Nothing to delete.")
+        return
+    verb = "Would delete" if args.dry_run else "Deleted"
+    total = sum(p.stat().st_size for p in removed if p.exists())
+    for path in removed:
+        print(f"  {path}")
+    print(f"{verb} {len(removed)} file(s), {total / 1e6:.0f} MB.")
+
+
 def cmd_test_telegram(cfg: dict, args) -> None:
     from .telegram import flush_queue, send_summary, test_connection
     username = test_connection()
@@ -459,6 +482,11 @@ def main() -> None:
     sub.add_parser("doctor", help="validate the whole setup")
     sub.add_parser("test-telegram", help="send a test message")
 
+    p = sub.add_parser("cleanup",
+                       help="delete audio older than output.audio_retention_h")
+    p.add_argument("--dry-run", action="store_true",
+                   help="show what would be deleted without deleting")
+
     p = sub.add_parser("debug",
                        help="inspect a session: stages, timings, issues")
     p.add_argument("session", help="session dir (name or full path)")
@@ -475,8 +503,8 @@ def main() -> None:
         "status": cmd_status, "pause": cmd_pause, "record": cmd_record,
         "list": cmd_list, "summary": cmd_summary, "reprocess": cmd_reprocess,
         "label": cmd_label, "speakers": cmd_speakers, "doctor": cmd_doctor,
-        "debug": cmd_debug, "test-telegram": cmd_test_telegram,
-        "autostart": cmd_autostart,
+        "debug": cmd_debug, "cleanup": cmd_cleanup,
+        "test-telegram": cmd_test_telegram, "autostart": cmd_autostart,
     }
     handlers[args.command](cfg, args)
 

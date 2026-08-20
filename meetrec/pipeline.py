@@ -14,7 +14,8 @@ from pathlib import Path
 import numpy as np
 
 from . import notify, telegram
-from .config import data_dir
+from .config import (SUMMARY_MD, TRANSCRIPT_MD, TRANSCRIPT_TXT, data_dir,
+                     load_config)
 from .diarize import (HFTokenMissing, assign_speakers_to_segments,
                       diarize_track, speaker_embeddings)
 from .merge import merge_tracks, to_markdown, to_plain_text
@@ -24,8 +25,6 @@ from .voiceprints import VoiceprintDB
 
 log = logging.getLogger(__name__)
 
-MYSELF = "EU"
-
 
 def _write_json(path: Path, data) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2),
@@ -34,6 +33,26 @@ def _write_json(path: Path, data) -> None:
 
 def _read_json(path: Path):
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _restore_tracks_from_flac(session_dir: Path) -> None:
+    """Rebuild track_mic.wav / track_sys.wav from audio.flac channels
+    (mic=left, system=right). Makes `reprocess --full` work on sessions
+    whose raw WAVs were cleaned up (output.keep_wav=false)."""
+    import soundfile as sf
+
+    flac = session_dir / "audio.flac"
+    if not flac.exists():
+        return
+    targets = [(session_dir / "track_mic.wav", 0),
+               (session_dir / "track_sys.wav", 1)]
+    if all(path.exists() for path, _ in targets):
+        return
+    data, rate = sf.read(flac, dtype="int16", always_2d=True)
+    for path, channel in targets:
+        if not path.exists() and data.shape[1] > channel:
+            sf.write(path, data[:, channel], rate, subtype="PCM_16")
+            log.info("Restored %s from audio.flac", path.name)
 
 
 def _mix_to_flac(session_dir: Path) -> None:
@@ -93,9 +112,12 @@ def _identify_speakers(cfg: dict, session_dir: Path,
     return mapping
 
 
-def regenerate_transcripts(session_dir: Path) -> dict:
-    """Rebuild transcricao.txt/.md (and meta speakers) from saved
+def regenerate_transcripts(session_dir: Path,
+                           self_label: str | None = None) -> dict:
+    """Rebuild transcript.txt/.md (and meta speakers) from saved
     intermediates, applying speaker_map.json. Used by process and label."""
+    if self_label is None:
+        self_label = load_config()["diarization"].get("self_label", "ME")
     mic = _read_json(session_dir / "transcript_mic.json") \
         if (session_dir / "transcript_mic.json").exists() \
         else {"segments": [], "language": None, "language_probability": 0}
@@ -110,7 +132,8 @@ def regenerate_transcripts(session_dir: Path) -> dict:
         raw = seg.get("speaker", "SPEAKER_??")
         seg["speaker"] = speaker_map.get(raw, raw)
 
-    blocks = merge_tracks(mic["segments"], sys_tr["segments"])
+    blocks = merge_tracks(mic["segments"], sys_tr["segments"],
+                          self_label=self_label)
     speakers = sorted({b["speaker"] for b in blocks})
     language = sys_tr["language"] or mic["language"] or "en"
 
@@ -125,9 +148,9 @@ def regenerate_transcripts(session_dir: Path) -> dict:
     })
     _write_json(meta_path, meta)
 
-    (session_dir / "transcricao.txt").write_text(
+    (session_dir / TRANSCRIPT_TXT).write_text(
         to_plain_text(blocks), encoding="utf-8")
-    (session_dir / "transcricao.md").write_text(
+    (session_dir / TRANSCRIPT_MD).write_text(
         to_markdown(blocks, meta), encoding="utf-8")
     return {"blocks": blocks, "meta": meta}
 
@@ -150,6 +173,12 @@ def process_session(cfg: dict, session_dir: Path,
 
     mic_wav = session_dir / "track_mic.wav"
     sys_wav = session_dir / "track_sys.wav"
+
+    # 0. if the raw WAVs were cleaned up but a stage needs them again
+    # (reprocess --full), rebuild them from the FLAC channels
+    if not (mic_wav.exists() and sys_wav.exists()):
+        with rec.stage("restore_tracks"):
+            _restore_tracks_from_flac(session_dir)
 
     # 1. transcription (both tracks, separately). Fatal: without it there
     # is nothing downstream to work with.
@@ -198,7 +227,9 @@ def process_session(cfg: dict, session_dir: Path,
 
     # 3. chronological merge + output documents (fatal: this IS the product)
     with rec.stage("merge", fatal=True):
-        result = regenerate_transcripts(session_dir)
+        result = regenerate_transcripts(
+            session_dir,
+            self_label=cfg["diarization"].get("self_label", "ME"))
         meta = result["meta"]
 
     # 4. FLAC with both tracks (mic=left, system=right)
@@ -211,12 +242,12 @@ def process_session(cfg: dict, session_dir: Path,
     # 5. summary in the detected (or forced) language
     summary_text = None
     with rec.stage("summary"):
-        transcript_text = (session_dir / "transcricao.txt") \
+        transcript_text = (session_dir / TRANSCRIPT_TXT) \
             .read_text(encoding="utf-8")
         lang_cfg = cfg["summary"].get("language", "auto")
         summary_lang = meta["language"] if lang_cfg == "auto" else lang_cfg
         summary_text = summarize(cfg, summary_lang, transcript_text)
-        (session_dir / "resumo.md").write_text(summary_text, encoding="utf-8")
+        (session_dir / SUMMARY_MD).write_text(summary_text, encoding="utf-8")
         rec.note("summary", language=summary_lang)
 
     # 6. delivery
@@ -234,7 +265,7 @@ def process_session(cfg: dict, session_dir: Path,
     # transcripts are safely on disk; `label` falls back to audio.flac)
     if not cfg["output"].get("keep_wav", False):
         if ((session_dir / "audio.flac").exists()
-                and (session_dir / "transcricao.txt").exists()):
+                and (session_dir / TRANSCRIPT_TXT).exists()):
             for name in ("track_mic.wav", "track_sys.wav"):
                 (session_dir / name).unlink(missing_ok=True)
             log.info("Raw WAV tracks removed (output.keep_wav=false)")
@@ -253,6 +284,41 @@ def process_session(cfg: dict, session_dir: Path,
             notify.speakers_unlabeled(session_dir, unknown_count)
     log.info("Done in %.0fs (%d issue(s))",
              meta["processing_s"], rec.issue_count)
+
+
+AUDIO_FILES = ("audio.flac", "track_mic.wav", "track_sys.wav")
+
+
+def cleanup_expired_audio(cfg: dict, dry_run: bool = False) -> list[Path]:
+    """Delete audio files from sessions processed more than
+    output.audio_retention_h hours ago. Transcripts, summary, metadata and
+    label excerpts are never touched. Returns the files (that would be)
+    deleted."""
+    retention_h = float(cfg["output"].get("audio_retention_h", 0) or 0)
+    if retention_h <= 0:
+        return []
+    cutoff = time.time() - retention_h * 3600
+    out_dir = Path(cfg["output"]["dir"])
+    if not out_dir.exists():
+        return []
+    removed: list[Path] = []
+    for session in out_dir.iterdir():
+        if not session.is_dir():
+            continue
+        # only expire sessions that are fully processed — never delete the
+        # sole copy of an untranscribed recording
+        from .config import find_transcript
+        if find_transcript(session) is None:
+            continue
+        for name in AUDIO_FILES:
+            path = session / name
+            if path.exists() and path.stat().st_mtime < cutoff:
+                removed.append(path)
+                if not dry_run:
+                    path.unlink()
+    if removed and not dry_run:
+        log.info("Audio retention: deleted %d file(s)", len(removed))
+    return removed
 
 
 def new_session_dir(cfg: dict) -> Path:

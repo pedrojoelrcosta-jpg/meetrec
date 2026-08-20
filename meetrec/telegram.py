@@ -15,7 +15,7 @@ from pathlib import Path
 
 import requests
 
-from .config import data_dir, env
+from .config import data_dir, env, find_transcript
 
 log = logging.getLogger(__name__)
 
@@ -110,8 +110,8 @@ def deliver(cfg: dict, session_dir: Path, summary: str, title: str) -> bool:
     try:
         send_summary(summary, title)
         if cfg["telegram"]["send_full_transcript"]:
-            transcript = session_dir / "transcricao.txt"
-            if transcript.exists():
+            transcript = find_transcript(session_dir)
+            if transcript:
                 send_document(transcript, f"Transcript — {title}")
         return True
     except TelegramNotConfigured:
@@ -137,8 +137,8 @@ def flush_queue() -> int:
             payload = json.loads(item.read_text(encoding="utf-8"))
             send_summary(payload["summary"], payload["title"])
             if payload.get("send_transcript"):
-                transcript = Path(payload["session_dir"]) / "transcricao.txt"
-                if transcript.exists():
+                transcript = find_transcript(Path(payload["session_dir"]))
+                if transcript:
                     send_document(transcript,
                                   f"Transcript — {payload['title']}")
             item.unlink()

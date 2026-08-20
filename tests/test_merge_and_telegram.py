@@ -14,8 +14,13 @@ def test_merge_is_chronological():
     sys = [seg(0.0, 8.0, "Shall we start?", "SPEAKER_00"),
            seg(14.0, 20.0, "Great, moving on.", "SPEAKER_00")]
     blocks = merge_tracks(mic, sys)
-    assert [b["speaker"] for b in blocks] == ["SPEAKER_00", "EU", "SPEAKER_00"]
+    assert [b["speaker"] for b in blocks] == ["SPEAKER_00", "ME", "SPEAKER_00"]
     assert blocks[0]["start"] < blocks[1]["start"] < blocks[2]["start"]
+
+
+def test_merge_self_label_is_configurable():
+    blocks = merge_tracks([seg(0.0, 2.0, "Hello")], [], self_label="EU")
+    assert blocks[0]["speaker"] == "EU"
 
 
 def test_merge_joins_adjacent_same_speaker():
@@ -33,9 +38,9 @@ def test_merge_respects_gap_limit():
 
 
 def test_plain_text_format():
-    text = to_plain_text([{"speaker": "EU", "start": 65.0, "end": 70.0,
+    text = to_plain_text([{"speaker": "ME", "start": 65.0, "end": 70.0,
                            "text": "Hello"}])
-    assert text == "[00:01:05] EU: Hello\n"
+    assert text == "[00:01:05] ME: Hello\n"
 
 
 def test_split_message_short_is_untouched():

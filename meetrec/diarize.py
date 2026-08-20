@@ -1,7 +1,7 @@
 """Diarization of the system track with pyannote.audio + speaker embeddings.
 
 Only track_sys.wav is diarized — the user's voice is already isolated on the
-microphone track and is labeled "EU" directly.
+microphone track and is labeled directly with `diarization.self_label`.
 
 Requires accepting the model terms on HuggingFace and setting HF_TOKEN:
   1. https://huggingface.co/pyannote/speaker-diarization-3.1  -> accept

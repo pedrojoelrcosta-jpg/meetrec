@@ -9,6 +9,22 @@ from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
+# Canonical output filenames (session folder artifacts)
+TRANSCRIPT_TXT = "transcript.txt"
+TRANSCRIPT_MD = "transcript.md"
+SUMMARY_MD = "summary.md"
+# Pre-1.0 sessions used Portuguese names; still recognized when reading
+LEGACY_TRANSCRIPT_TXT = "transcricao.txt"
+LEGACY_SUMMARY_MD = "resumo.md"
+
+
+def find_transcript(session_dir: Path) -> Path | None:
+    """The session's plain-text transcript, accepting the legacy name."""
+    for name in (TRANSCRIPT_TXT, LEGACY_TRANSCRIPT_TXT):
+        if (session_dir / name).exists():
+            return session_dir / name
+    return None
+
 DEFAULTS: dict = {
     "detector": {
         "poll_interval_s": 2,
@@ -25,7 +41,10 @@ DEFAULTS: dict = {
         "device": "auto",
         "compute_type": "auto",
     },
-    "diarization": {"similarity_threshold": 0.75},
+    "diarization": {
+        "similarity_threshold": 0.75,
+        "self_label": "ME",  # how the mic-track speaker (you) is labeled
+    },
     "summary": {
         "backend": "gemini",
         "language": "auto",
@@ -34,7 +53,14 @@ DEFAULTS: dict = {
         "ollama_url": "http://localhost:11434",
         "anthropic_model": "claude-sonnet-5",
     },
-    "output": {"dir": "~/Reunioes", "keep_wav": False},
+    "output": {
+        "dir": "~/Meetings",
+        "keep_wav": False,
+        # 0 = keep audio.flac forever; N = delete audio N hours after
+        # processing (transcripts/summary always kept). Label speakers
+        # before it expires — excerpts need the audio.
+        "audio_retention_h": 0,
+    },
     "telegram": {"enabled": True, "send_full_transcript": False},
     "debug": {
         "level": "info",    # info | debug — logging verbosity

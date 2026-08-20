@@ -65,7 +65,7 @@ RECORDING   track_mic.wav  (your microphone)
 
 PROCESSING  faster-whisper (large-v3-turbo) on both tracks, separately
             pyannote diarization on track_sys only (you are already isolated
-              on the mic track, labeled "EU")
+              on the mic track, labeled with `diarization.self_label` — "ME" by default)
             speaker embeddings → matched against a persistent voiceprint DB
             chronological merge → transcript documents
             LLM summary in the meeting's language
@@ -88,11 +88,11 @@ network blip doesn't split one meeting into two.
 Each meeting produces a folder:
 
 ```
-~/Reunioes/2026-08-20_1400/
+~/Meetings/2026-08-20_1400/
 ├── audio.flac         # stereo mix: your mic on the left, everyone else on the right
-├── transcricao.txt    # [HH:MM:SS] Speaker: text — one block per speaking turn
-├── transcricao.md     # same, formatted for reading
-├── resumo.md          # executive summary, decisions, action items with owners,
+├── transcript.txt     # [HH:MM:SS] Speaker: text — one block per speaking turn
+├── transcript.md      # same, formatted for reading
+├── summary.md         # executive summary, decisions, action items with owners,
 │                      #   open questions — in the meeting's language
 ├── meta.json          # duration, language + confidence, speakers, models used
 └── (intermediates)    # transcript_*.json, diarization.json, embeddings.npz,
@@ -101,7 +101,7 @@ Each meeting produces a folder:
 ```
 
 And on Telegram: the summary as one or more messages (split under the
-4096-char API limit), plus `transcricao.txt` as a document **only** if you
+4096-char API limit), plus `transcript.txt` as a document **only** if you
 explicitly enable `telegram.send_full_transcript`.
 
 ## Minimum requirements
@@ -202,6 +202,8 @@ meetrec summary <dir>    # regenerate just the summary (--backend, --language,
 meetrec reprocess <dir>  # re-run processing on a session (--full = from scratch)
 meetrec label <dir>      # play excerpts of unknown speakers and name them
 meetrec speakers         # list known voices (--rename OLD NEW | --delete NAME)
+meetrec cleanup          # expire old audio per output.audio_retention_h
+                         #   (--dry-run previews; the daemon also runs this)
 meetrec setup            # re-run the interactive wizard anytime
 meetrec doctor           # validate the whole setup
 meetrec debug <dir>      # session x-ray: stage timings, recorded issues,
@@ -222,7 +224,8 @@ speakers (points you to `meetrec label`), and errors.
 ## Speaker identification workflow
 
 1. Your own voice never goes through diarization — the mic track is isolated
-   by construction and labeled **EU**.
+   by construction and labeled **ME** (configurable via
+   `diarization.self_label` — e.g. `EU` for Portuguese transcripts).
 2. The system track is diarized with pyannote; each speaker gets an
    embedding (voiceprint) averaged over their longest speaking turns.
 3. Each embedding is compared, by cosine similarity, against the persistent
@@ -260,8 +263,10 @@ code, so a missing key just falls back.
 | `summary.gemini_model` | `gemini-2.0-flash` | Model for the Gemini backend |
 | `summary.ollama_model` | `gemma3:4b` | Local model — small, strong multilingual, CPU-friendly |
 | `summary.ollama_url` | `http://localhost:11434` | Ollama endpoint |
-| `output.dir` | `~/Reunioes` | Where session folders are created |
+| `output.dir` | `~/Meetings` | Where session folders are created |
+| `diarization.self_label` | `ME` | Label for your own (mic-track) speech blocks |
 | `output.keep_wav` | `false` | Keep the raw per-track WAVs after the FLAC mix (they cost ~120 MB/h; `label` works from the FLAC either way) |
+| `output.audio_retention_h` | `0` | `0` keeps `audio.flac` forever; e.g. `72` deletes the audio 72 h after processing while keeping transcripts and summary. The daemon sweeps every 30 min; `meetrec cleanup --dry-run` previews. Label unknown speakers before the audio expires |
 | `notifications.*` | all `true` | Per-event toast toggles (`recording_stopped`, `processing_done`, `speakers_unlabeled`, `errors`). The recording-start toast is not configurable by design |
 | `debug.level` | `info` | `debug` for verbose logs (or `--debug` on any command) |
 | `debug.strict` | `false` | `true` makes pipeline stage errors raise immediately instead of being recorded in the session's `debug.json` and skipped — use while debugging |

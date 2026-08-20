@@ -20,6 +20,8 @@ transcription:
 
 diarization:
   similarity_threshold: 0.75 # cosine threshold to recognize a known voice
+  self_label: ME             # label for your own (mic-track) speech blocks,
+                             # e.g. EU for Portuguese transcripts
 
 summary:
   backend: gemini            # gemini | ollama | anthropic (others are fallbacks)
@@ -34,9 +36,15 @@ summary:
   anthropic_model: claude-sonnet-5
 
 output:
-  dir: ~/Reunioes
+  dir: ~/Meetings
   keep_wav: false            # raw track WAVs are deleted once audio.flac and
                              # the transcripts exist (saves ~120 MB per hour)
+  audio_retention_h: 0       # 0 = keep audio.flac forever; e.g. 72 = delete
+                             # the audio 72h after processing, keeping the
+                             # transcripts and summary. The daemon sweeps
+                             # every 30 min; run `meetrec cleanup` manually.
+                             # Note: `meetrec label` needs the audio — name
+                             # unknown speakers before it expires.
 
 telegram:
   enabled: true

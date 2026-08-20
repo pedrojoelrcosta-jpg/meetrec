@@ -67,9 +67,10 @@ def find_unprocessed_sessions(cfg: dict) -> list[Path]:
     for session in sorted(out_dir.iterdir()):
         if not session.is_dir():
             continue
+        from .config import find_transcript
         has_audio = any((session / n).exists() for n in
                         ("track_mic.wav", "track_sys.wav", "audio.flac"))
-        if has_audio and not (session / "transcricao.txt").exists():
+        if has_audio and find_transcript(session) is None:
             pending.append(session)
     return pending
 
@@ -179,12 +180,20 @@ class Daemon:
         self._write_state()
         try:
             last_beat = 0.0
+            last_sweep = time.monotonic()
             while True:
                 self.detector.tick(time.monotonic(),
                                    self.detector._scan_fn())
                 if time.monotonic() - last_beat > 30:
                     self._write_state()  # heartbeat for `meetrec status`
                     last_beat = time.monotonic()
+                if time.monotonic() - last_sweep > 1800:  # every 30 min
+                    from .pipeline import cleanup_expired_audio
+                    try:
+                        cleanup_expired_audio(self.cfg)
+                    except Exception:
+                        log.exception("audio retention sweep failed")
+                    last_sweep = time.monotonic()
                 time.sleep(self.cfg["detector"]["poll_interval_s"])
         except KeyboardInterrupt:
             log.info("Interrupted")

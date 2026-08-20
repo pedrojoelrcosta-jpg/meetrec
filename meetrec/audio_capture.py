@@ -1,4 +1,4 @@
-"""Dual-track capture: microphone + WASAPI loopback of the default output.
+﻿"""Dual-track capture: microphone + WASAPI loopback of the default output.
 
 Uses PyAudioWPatch (native WASAPI loopback, no virtual audio cables). Each
 track is written incrementally to WAV in chunks — nothing accumulates in
@@ -23,6 +23,27 @@ log = logging.getLogger(__name__)
 
 CHUNK_FRAMES = 4096
 REOPEN_RETRY_S = 1.0
+
+# PortAudio's Pa_Initialize/Pa_Terminate are NOT thread-safe: the mic and
+# loopback threads creating their PyAudio instances concurrently causes an
+# access violation that kills the whole process instantly. Every PyAudio
+# construction, termination and stream open is serialized through this lock.
+_PA_LOCK = threading.Lock()
+
+
+def _new_pa() -> pyaudio.PyAudio:
+    with _PA_LOCK:
+        return pyaudio.PyAudio()
+
+
+def _terminate_pa(p: pyaudio.PyAudio | None) -> None:
+    if p is None:
+        return
+    try:
+        with _PA_LOCK:
+            p.terminate()
+    except Exception:
+        pass
 
 
 def _default_mic(p: pyaudio.PyAudio) -> dict:
@@ -53,6 +74,46 @@ def _default_loopback(p: pyaudio.PyAudio) -> dict:
         raise
 
 
+class _SilenceKeeper(threading.Thread):
+    """Continuously plays silence to the default output.
+
+    WASAPI loopback only delivers packets while the output is rendering:
+    with nothing playing, the loopback read() blocks indefinitely — the sys
+    track would stall on every quiet moment (and never stop cleanly). A
+    permanent silent stream keeps the loopback ticking without audible
+    effect and keeps the recorded timeline continuous.
+    """
+
+    def __init__(self, stop_event: threading.Event):
+        super().__init__(name="rec-keepalive", daemon=True)
+        self._stop_event = stop_event
+
+    def run(self) -> None:
+        while not self._stop_event.is_set():
+            pa = _new_pa()
+            stream = None
+            try:
+                with _PA_LOCK:
+                    out = pa.get_default_output_device_info()
+                    rate = int(out["defaultSampleRate"])
+                    stream = pa.open(format=pyaudio.paInt16, channels=1,
+                                     rate=rate, output=True,
+                                     frames_per_buffer=1024)
+                silence = b"\x00" * 2048
+                while not self._stop_event.is_set():
+                    stream.write(silence)  # paces itself at real-time rate
+            except Exception:
+                # output device changed/vanished — retry with a fresh handle
+                time.sleep(REOPEN_RETRY_S)
+            finally:
+                try:
+                    if stream:
+                        stream.close()
+                except Exception:
+                    pass
+                _terminate_pa(pa)
+
+
 class _TrackRecorder(threading.Thread):
     """Records one device to a WAV file, tolerating device changes."""
 
@@ -60,7 +121,7 @@ class _TrackRecorder(threading.Thread):
         super().__init__(name=f"rec-{name}", daemon=True)
         self._wav_path = wav_path
         self._get_device = get_device
-        self._stop = stop_event
+        self._stop_event = stop_event
         self._pa: pyaudio.PyAudio | None = None
         self.error: Exception | None = None
         self.rate = 0
@@ -68,34 +129,31 @@ class _TrackRecorder(threading.Thread):
         self.frames_written = 0
 
     def _open_stream(self):
-        device = self._get_device(self._pa)
-        rate = int(device["defaultSampleRate"])
-        # WASAPI loopback streams must be opened with the device's real
-        # channel count (a 5.1 output would fail if clamped to 2); the
-        # capture loop downmixes to the target layout afterwards
-        channels = max(1, int(device["maxInputChannels"]))
-        stream = self._pa.open(
-            format=pyaudio.paInt16,
-            channels=channels,
-            rate=rate,
-            input=True,
-            input_device_index=device["index"],
-            frames_per_buffer=CHUNK_FRAMES,
-        )
+        with _PA_LOCK:
+            device = self._get_device(self._pa)
+            rate = int(device["defaultSampleRate"])
+            # WASAPI loopback streams must be opened with the device's real
+            # channel count (a 5.1 output would fail if clamped to 2); the
+            # capture loop downmixes to the target layout afterwards
+            channels = max(1, int(device["maxInputChannels"]))
+            stream = self._pa.open(
+                format=pyaudio.paInt16,
+                channels=channels,
+                rate=rate,
+                input=True,
+                input_device_index=device["index"],
+                frames_per_buffer=CHUNK_FRAMES,
+            )
         return stream, rate, channels
 
     def _reset_pa(self) -> None:
         """PortAudio snapshots the device list when PyAudio is constructed,
         so recovering from a device change requires a fresh instance."""
-        try:
-            if self._pa:
-                self._pa.terminate()
-        except Exception:
-            pass
-        self._pa = pyaudio.PyAudio()
+        _terminate_pa(self._pa)
+        self._pa = _new_pa()
 
     def run(self) -> None:
-        self._pa = pyaudio.PyAudio()
+        self._pa = _new_pa()
         wav = None
         stream = None
         try:
@@ -108,7 +166,7 @@ class _TrackRecorder(threading.Thread):
             src_rate, src_channels = self.rate, src_channels0
             last_ok = time.monotonic()
 
-            while not self._stop.is_set():
+            while not self._stop_event.is_set():
                 try:
                     data = stream.read(CHUNK_FRAMES, exception_on_overflow=False)
                 except OSError:
@@ -118,7 +176,7 @@ class _TrackRecorder(threading.Thread):
                     except Exception:
                         pass
                     stream = None
-                    while stream is None and not self._stop.is_set():
+                    while stream is None and not self._stop_event.is_set():
                         self._reset_pa()  # refresh PortAudio's device list
                         try:
                             stream, src_rate, src_channels = self._open_stream()
@@ -163,7 +221,7 @@ class _TrackRecorder(threading.Thread):
             for closer in (
                 lambda: stream and stream.close(),
                 lambda: wav and wav.close(),
-                lambda: self._pa and self._pa.terminate(),
+                lambda: _terminate_pa(self._pa),
             ):
                 try:
                     closer()
@@ -182,21 +240,28 @@ class DualTrackRecorder:
         self.session_dir = session_dir
         session_dir.mkdir(parents=True, exist_ok=True)
         self.started_at: float | None = None
-        self._stop = threading.Event()
+        self._stop_event = threading.Event()
+        self._keeper_stop = threading.Event()
         self.mic = _TrackRecorder("mic", session_dir / "track_mic.wav",
-                                  _default_mic, self._stop)
+                                  _default_mic, self._stop_event)
         self.sys = _TrackRecorder("sys", session_dir / "track_sys.wav",
-                                  _default_loopback, self._stop)
+                                  _default_loopback, self._stop_event)
+        self._keeper = _SilenceKeeper(self._keeper_stop)
 
     def start(self) -> None:
         self.started_at = time.time()
+        self._keeper.start()  # before the loopback opens, so data flows
         self.mic.start()
         self.sys.start()
 
     def stop(self) -> dict:
-        self._stop.set()
+        self._stop_event.set()
+        # keeper must outlive the sys join: if silence stops first, the sys
+        # thread can be stuck in a blocking read with no data ever arriving
         self.mic.join(timeout=10)
         self.sys.join(timeout=10)
+        self._keeper_stop.set()
+        self._keeper.join(timeout=5)
 
         def track_stats(track: _TrackRecorder) -> dict:
             error = str(track.error) if track.error else None

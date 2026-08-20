@@ -153,8 +153,9 @@ def cmd_record(cfg: dict, args) -> None:
               "recording the microphone only"
               + (" (fine for in-person meetings)." if in_person else "."))
 
-    _drain_console_input()  # a stray Enter must not stop the recording
-    input("Press Enter to stop...\n")
+    print("Press Enter to stop...", flush=True)
+    _wait_for_enter()
+    print("Stopping...", flush=True)
     stats = recorder.stop()
     if stats["duration_s"] < 3:
         import shutil
@@ -465,16 +466,27 @@ def cmd_autostart(cfg: dict, args) -> None:
         print(f"Scheduled task '{task_name}' removed.")
 
 
-def _drain_console_input() -> None:
-    """Discard keystrokes buffered before we started waiting (e.g. a stray
-    Enter left over from a previous Ctrl+C) — they would stop the recording
-    instantly."""
+def _wait_for_enter(min_wait_s: float = 2.0) -> None:
+    """Block until the user actually presses Enter, at least min_wait_s
+    after this call. Reads raw console keys so stray buffered input (e.g. a
+    leftover Enter from a previous Ctrl+C) can never stop the recording
+    instantly; falls back to input() when stdin is not a console."""
+    if not sys.stdin.isatty():
+        input()
+        return
     try:
         import msvcrt
-        while msvcrt.kbhit():
-            msvcrt.getwch()
     except ImportError:
-        pass
+        input()
+        return
+    started = time.monotonic()
+    while True:
+        if msvcrt.kbhit():
+            ch = msvcrt.getwch()
+            if ch in ("\r", "\n") and time.monotonic() - started >= min_wait_s:
+                return
+        else:
+            time.sleep(0.05)
 
 
 def _pid_alive(pid: int) -> bool:

@@ -213,8 +213,8 @@ meetrec doctor           # validate the whole setup
 meetrec debug <dir>      # session x-ray: stage timings, recorded issues,
                          #   capture errors (--traceback for full detail)
 meetrec test-telegram    # send a test message to your chat
-meetrec autostart on     # create a Task Scheduler job that starts meetrec at
-                         #   logon (meetrec autostart off removes it)
+meetrec autostart on     # start meetrec at every logon (per-user Run key,
+                         #   no admin needed; meetrec autostart off removes)
 ```
 
 `<dir>` accepts either the session folder name (`2026-08-20_1400`) or a full

@@ -467,19 +467,28 @@ def cmd_test_telegram(cfg: dict, args) -> None:
 
 
 def cmd_autostart(cfg: dict, args) -> None:
-    task_name = "meetrec"
+    # HKCU Run key: per-user logon autostart with no admin rights needed
+    # (schtasks /SC ONLOGON requires elevation)
+    import winreg
+    run_key = r"Software\Microsoft\Windows\CurrentVersion\Run"
     if args.mode == "on":
         pythonw = Path(sys.executable).with_name("pythonw.exe")
-        cmd = f'"{pythonw}" -m meetrec start'
-        subprocess.run(
-            ["schtasks", "/Create", "/F", "/SC", "ONLOGON",
-             "/TN", task_name, "/TR", cmd],
-            check=True)
-        print(f"Scheduled task '{task_name}' created (runs at logon).")
+        if not pythonw.exists():
+            pythonw = Path(sys.executable)  # fallback: visible console
+        command = f'"{pythonw}" -m meetrec start'
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, run_key, 0,
+                            winreg.KEY_SET_VALUE) as key:
+            winreg.SetValueEx(key, "meetrec", 0, winreg.REG_SZ, command)
+        print("Autostart enabled: meetrec will run at every logon "
+              "(background, no window).")
     else:
-        subprocess.run(["schtasks", "/Delete", "/F", "/TN", task_name],
-                       check=False)
-        print(f"Scheduled task '{task_name}' removed.")
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, run_key, 0,
+                                winreg.KEY_SET_VALUE) as key:
+                winreg.DeleteValue(key, "meetrec")
+            print("Autostart removed.")
+        except FileNotFoundError:
+            print("Autostart was not enabled.")
 
 
 def _print_outputs(session_dir: Path) -> None:

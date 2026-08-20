@@ -1,4 +1,4 @@
-from meetrec.merge import merge_tracks, to_plain_text
+from meetrec.merge import drop_mic_echo, merge_tracks, to_plain_text
 from meetrec.telegram import MAX_MESSAGE_CHARS, split_message
 
 
@@ -41,6 +41,31 @@ def test_plain_text_format():
     text = to_plain_text([{"speaker": "ME", "start": 65.0, "end": 70.0,
                            "text": "Hello"}])
     assert text == "[00:01:05] ME: Hello\n"
+
+
+def test_echo_dedup_drops_bleed():
+    sys = [seg(10.0, 14.0, "We should ship the release on Friday.", "Ana")]
+    mic = [seg(10.3, 14.2, "we should ship the release on friday")]  # bleed
+    assert drop_mic_echo(mic, sys) == []
+
+
+def test_echo_dedup_keeps_real_speech_during_overlap():
+    sys = [seg(10.0, 14.0, "We should ship the release on Friday.", "Ana")]
+    mic = [seg(10.5, 13.0, "I completely disagree with that plan.")]
+    assert drop_mic_echo(mic, sys) == mic
+
+
+def test_echo_dedup_keeps_same_text_far_apart():
+    # repeating someone's words minutes later is quoting, not echo
+    sys = [seg(10.0, 14.0, "We should ship the release on Friday.", "Ana")]
+    mic = [seg(300.0, 304.0, "We should ship the release on Friday.")]
+    assert drop_mic_echo(mic, sys) == mic
+
+
+def test_echo_dedup_tolerates_muffled_transcription():
+    sys = [seg(10.0, 14.0, "We should ship the release on Friday.", "Ana")]
+    mic = [seg(10.4, 14.1, "we should ship the release friday")]  # lossy echo
+    assert drop_mic_echo(mic, sys) == []
 
 
 def test_split_message_short_is_untouched():

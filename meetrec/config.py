@@ -35,7 +35,12 @@ DEFAULTS: dict = {
             "Microsoft.WindowsSoundRecorder_8wekyb3d8bbwe",
         ],
     },
-    "audio": {"min_session_s": 60},
+    "audio": {
+        "min_session_s": 60,
+        # drop mic segments that duplicate simultaneous system audio —
+        # speaker bleed when the user listens on speakers, not headphones
+        "echo_dedup": True,
+    },
     "transcription": {
         "model": "large-v3-turbo",
         "device": "auto",

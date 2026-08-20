@@ -18,7 +18,7 @@ from .config import (SUMMARY_MD, TRANSCRIPT_MD, TRANSCRIPT_TXT, data_dir,
                      load_config)
 from .diarize import (HFTokenMissing, assign_speakers_to_segments,
                       diarize_track, speaker_embeddings)
-from .merge import merge_tracks, to_markdown, to_plain_text
+from .merge import drop_mic_echo, merge_tracks, to_markdown, to_plain_text
 from .summarize import summarize
 from .transcribe import transcribe_track
 from .voiceprints import VoiceprintDB
@@ -113,11 +113,16 @@ def _identify_speakers(cfg: dict, session_dir: Path,
 
 
 def regenerate_transcripts(session_dir: Path,
-                           self_label: str | None = None) -> dict:
+                           self_label: str | None = None,
+                           echo_dedup: bool | None = None) -> dict:
     """Rebuild transcript.txt/.md (and meta speakers) from saved
     intermediates, applying speaker_map.json. Used by process and label."""
-    if self_label is None:
-        self_label = load_config()["diarization"].get("self_label", "ME")
+    if self_label is None or echo_dedup is None:
+        cfg = load_config()
+        if self_label is None:
+            self_label = cfg["diarization"].get("self_label", "ME")
+        if echo_dedup is None:
+            echo_dedup = cfg["audio"].get("echo_dedup", True)
     mic = _read_json(session_dir / "transcript_mic.json") \
         if (session_dir / "transcript_mic.json").exists() \
         else {"segments": [], "language": None, "language_probability": 0}
@@ -132,7 +137,15 @@ def regenerate_transcripts(session_dir: Path,
         raw = seg.get("speaker", "SPEAKER_??")
         seg["speaker"] = speaker_map.get(raw, raw)
 
-    blocks = merge_tracks(mic["segments"], sys_tr["segments"],
+    mic_segments = mic["segments"]
+    if echo_dedup:
+        before = len(mic_segments)
+        mic_segments = drop_mic_echo(mic_segments, sys_tr["segments"])
+        if len(mic_segments) < before:
+            log.info("Echo dedup: dropped %d mic segment(s) that duplicated "
+                     "system audio (speaker bleed)",
+                     before - len(mic_segments))
+    blocks = merge_tracks(mic_segments, sys_tr["segments"],
                           self_label=self_label)
     speakers = sorted({b["speaker"] for b in blocks})
     language = sys_tr["language"] or mic["language"] or "en"
@@ -229,7 +242,8 @@ def process_session(cfg: dict, session_dir: Path,
     with rec.stage("merge", fatal=True):
         result = regenerate_transcripts(
             session_dir,
-            self_label=cfg["diarization"].get("self_label", "ME"))
+            self_label=cfg["diarization"].get("self_label", "ME"),
+            echo_dedup=cfg["audio"].get("echo_dedup", True))
         meta = result["meta"]
 
     # 4. FLAC with both tracks (mic=left, system=right)

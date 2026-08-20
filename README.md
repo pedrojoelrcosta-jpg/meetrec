@@ -258,6 +258,7 @@ code, so a missing key just falls back.
 | `detector.stop_debounce_s` | `30` | Capture-free time required before recording stops |
 | `detector.ignore_apps` | sound recorder, Xbox overlay | Executables/app-ids that never trigger recording (case-insensitive) |
 | `audio.min_session_s` | `60` | Sessions shorter than this are discarded entirely |
+| `audio.echo_dedup` | `true` | When you listen on **speakers**, your mic also captures the other participants; mic segments that overlap a system segment in time with near-identical text are dropped as echo instead of being misattributed to you. Harmless when using headphones |
 | `transcription.model` | `large-v3-turbo` | Any faster-whisper model name (`medium`, `small`… for weaker CPUs) |
 | `transcription.device` | `auto` | `auto` picks CUDA when available, else CPU |
 | `transcription.compute_type` | `auto` | `auto` = float16 on CUDA, int8 on CPU |

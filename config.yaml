@@ -12,6 +12,9 @@ detector:
 
 audio:
   min_session_s: 60          # sessions shorter than this are discarded
+  echo_dedup: true           # drop mic segments that duplicate simultaneous
+                             # system audio (speaker bleed when not using
+                             # headphones); harmless with headphones
 
 transcription:
   model: large-v3-turbo

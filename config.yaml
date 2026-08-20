@@ -1,0 +1,36 @@
+# meetrec configuration. Every key has a default in code — deleting a key
+# falls back to the default. Secrets go in .env, not here.
+
+detector:
+  poll_interval_s: 2
+  start_debounce_s: 15
+  stop_debounce_s: 30
+  ignore_apps:
+    - SoundRecorder.exe
+    - Microsoft.WindowsSoundRecorder_8wekyb3d8bbwe
+    - Microsoft.XboxGamingOverlay_8wekyb3d8bbwe
+
+audio:
+  min_session_s: 60          # sessions shorter than this are discarded
+
+transcription:
+  model: large-v3-turbo
+  device: auto               # auto | cuda | cpu
+  compute_type: auto         # auto -> float16 on CUDA, int8 on CPU
+
+diarization:
+  similarity_threshold: 0.75 # cosine threshold to recognize a known voice
+
+summary:
+  backend: gemini            # gemini | ollama | anthropic (others are fallbacks)
+  gemini_model: gemini-2.0-flash
+  ollama_model: llama3.1
+  ollama_url: http://localhost:11434
+  anthropic_model: claude-sonnet-5
+
+output:
+  dir: ~/Reunioes
+
+telegram:
+  enabled: true
+  send_full_transcript: false  # the transcript only leaves the machine if true

@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "meetrec"
+version = "0.1.0"
+description = "Gravação, transcrição e diarização automática de reuniões (100% local)"
+requires-python = ">=3.11"
+dependencies = [
+    "pyyaml",
+    "python-dotenv",
+    "requests",
+    "numpy",
+    "soundfile",
+    "PyAudioWPatch",
+    "faster-whisper",
+    "windows-toasts",
+    "pyannote.audio>=3.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.scripts]
+meetrec = "meetrec.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["meetrec*"]

@@ -128,6 +128,14 @@ def cmd_record(cfg: dict, args) -> None:
     from .pipeline import new_session_dir, process_session
     _setup_logging()
     in_person = getattr(args, "in_person", False)
+    # preflight the heavy ML import BEFORE recording: a transient DLL/memory
+    # failure should abort now, not after the meeting was captured
+    try:
+        import torch  # noqa: F401
+    except OSError as exc:
+        sys.exit(f"PyTorch failed to load ({exc}).\nThis is usually "
+                 "transient memory pressure — close some applications and "
+                 "try again.")
     recorder = DualTrackRecorder(new_session_dir(cfg))
     recorder.start()
     notify.recording_started({"manual recording"})
@@ -170,7 +178,12 @@ def cmd_record(cfg: dict, args) -> None:
                      "manual": True, "in_person": in_person},
                     ensure_ascii=False, indent=2),
         encoding="utf-8")
-    process_session(cfg, recorder.session_dir)
+    try:
+        process_session(cfg, recorder.session_dir)
+    except Exception as exc:  # noqa: BLE001 — recording is safe on disk
+        sys.exit(f"\nProcessing failed ({exc}).\nYour recording is safe in "
+                 f"{recorder.session_dir} — finish it anytime with:\n"
+                 f"  meetrec reprocess {recorder.session_dir.name}")
     _print_outputs(recorder.session_dir)
 
 

@@ -21,6 +21,7 @@ from .config import PROJECT_ROOT, load_config
 LINKS = {
     "hf_terms_1": "https://huggingface.co/pyannote/speaker-diarization-3.1",
     "hf_terms_2": "https://huggingface.co/pyannote/segmentation-3.0",
+    "hf_terms_3": "https://huggingface.co/pyannote/speaker-diarization-community-1",
     "hf_token": "https://huggingface.co/settings/tokens",
     "gemini": "https://aistudio.google.com/apikey",
     "botfather": "https://t.me/BotFather",
@@ -108,9 +109,10 @@ def run_wizard(cfg: dict) -> None:
 
     # 1. HuggingFace (diarization)
     print("1) Speaker diarization — HuggingFace token (free)")
-    print(f"   Accept the terms on BOTH pages (same account):")
+    print(f"   Accept the terms on ALL THREE pages (same account):")
     print(f"     {LINKS['hf_terms_1']}")
     print(f"     {LINKS['hf_terms_2']}")
+    print(f"     {LINKS['hf_terms_3']}")
     print(f"   Then create a READ token at {LINKS['hf_token']}")
     current = env.get("HF_TOKEN", "")
     token = _ask("HF token (Enter keeps current)" if current

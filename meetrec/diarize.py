@@ -4,10 +4,12 @@ Only track_sys.wav is diarized — the user's voice is already isolated on the
 microphone track and is labeled directly with `diarization.self_label`.
 
 Requires accepting the model terms on HuggingFace and setting HF_TOKEN:
-  1. https://huggingface.co/pyannote/speaker-diarization-3.1  -> accept
-  2. https://huggingface.co/pyannote/segmentation-3.0         -> accept
-  3. https://huggingface.co/settings/tokens -> create a read token
-  4. put HF_TOKEN=... in .env
+  1. https://huggingface.co/pyannote/speaker-diarization-3.1          -> accept
+  2. https://huggingface.co/pyannote/segmentation-3.0                 -> accept
+  3. https://huggingface.co/pyannote/speaker-diarization-community-1  -> accept
+     (pyannote.audio 4.x fetches shared assets from this repo too)
+  4. https://huggingface.co/settings/tokens -> create a read token
+  5. put HF_TOKEN=... in .env
 """
 
 import logging
@@ -40,9 +42,11 @@ def _require_token() -> str:
             "https://huggingface.co/pyannote/speaker-diarization-3.1\n"
             "  2. Accept the terms at "
             "https://huggingface.co/pyannote/segmentation-3.0\n"
-            "  3. Create a read token at "
+            "  3. Accept the terms at "
+            "https://huggingface.co/pyannote/speaker-diarization-community-1\n"
+            "  4. Create a read token at "
             "https://huggingface.co/settings/tokens\n"
-            "  4. Add HF_TOKEN=... to the .env file in the project root")
+            "  5. Add HF_TOKEN=... to the .env file in the project root")
     return token
 
 

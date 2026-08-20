@@ -47,10 +47,19 @@ if ($LASTEXITCODE -ne 0) {
 }
 Write-Host "[ok] Dependencies installed"
 
-# 4. interactive setup wizard (keys, Telegram, preferences, autostart)
+# 4. put `meetrec` on the user PATH so it works from any terminal
+$scripts = Join-Path $venv 'Scripts'
+$userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+if ($userPath -notlike "*$scripts*") {
+    [Environment]::SetEnvironmentVariable('Path', "$userPath;$scripts", 'User')
+    Write-Host "[ok] Added $scripts to your PATH (new terminals will have 'meetrec')"
+} else {
+    Write-Host "[ok] 'meetrec' already on PATH"
+}
+
+# 5. interactive setup wizard (keys, Telegram, preferences, autostart)
 & $python -m meetrec setup
 
-Write-Host "`nInstalled. Useful commands:"
-Write-Host "  $python -m meetrec doctor"
-Write-Host "  $python -m meetrec start"
-Write-Host "`nTip: add $(Join-Path $venv 'Scripts') to PATH to use 'meetrec' directly."
+Write-Host "`nInstalled. Open a NEW terminal and run:"
+Write-Host "  meetrec doctor    # validate this machine"
+Write-Host "  meetrec start     # run the daemon and join a meeting"

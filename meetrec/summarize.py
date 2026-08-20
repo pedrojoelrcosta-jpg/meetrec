@@ -83,6 +83,10 @@ class _NotConfigured(RuntimeError):
     pass
 
 
+class _Retryable(RuntimeError):
+    pass
+
+
 def _gemini(cfg: dict, prompt: str) -> str:
     # Free API key from Google AI Studio: https://aistudio.google.com/apikey
     # Free-tier quota is shared and often busy — retry hard before giving up.
@@ -97,25 +101,31 @@ def _gemini(cfg: dict, prompt: str) -> str:
         try:
             response = requests.post(
                 url,
-                params={"key": api_key},
+                # key goes in a header, never in the URL: query params end
+                # up verbatim in logs, tracebacks and debug.json
+                headers={"x-goog-api-key": api_key},
                 json={"contents": [{"parts": [{"text": prompt}]}]},
                 timeout=300,
             )
-            if response.status_code in (429, 500, 503):
-                raise requests.HTTPError(f"HTTP {response.status_code}",
-                                         response=response)
-            response.raise_for_status()
+            if response.status_code in (429, 500, 502, 503, 504):
+                # transient / rate-limit: worth waiting for
+                raise _Retryable(f"HTTP {response.status_code}")
+            response.raise_for_status()  # 400/401/403… fail immediately
             data = response.json()
             return "".join(
                 part.get("text", "")
                 for part in data["candidates"][0]["content"]["parts"]
             ).strip()
-        except (requests.RequestException, KeyError, IndexError) as exc:
+        except (_Retryable, requests.ConnectionError,
+                requests.Timeout) as exc:
             last_error = exc
             wait = GEMINI_BACKOFF_BASE_S * 2 ** attempt
             log.warning("Gemini attempt %d/%d failed (%s); retrying in %.0fs",
                         attempt + 1, GEMINI_RETRIES, exc, wait)
             time.sleep(wait)
+        except (KeyError, IndexError) as exc:
+            raise RuntimeError(f"Gemini returned an unexpected response "
+                               f"shape: {exc}") from exc
     raise last_error  # type: ignore[misc]
 
 

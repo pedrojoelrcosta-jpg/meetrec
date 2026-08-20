@@ -64,12 +64,26 @@ def split_message(text: str, limit: int = MAX_MESSAGE_CHARS) -> list[str]:
     return chunks
 
 
-def _post(method: str, *, data: dict, files: dict | None = None) -> None:
+def _redacted(exc: Exception, token: str) -> RuntimeError:
+    """The bot token lives in the request URL (Telegram's API design), so
+    any requests exception would leak it into logs and debug.json."""
+    return RuntimeError(str(exc).replace(token, "***TOKEN***"))
+
+
+def _post(method: str, *, data: dict,
+          file_field: tuple[str, str, bytes] | None = None) -> None:
+    """file_field: (form_name, filename, content) — passed as bytes so every
+    retry uploads the full document (a file handle would be consumed by the
+    first attempt and later retries would send an empty upload)."""
     token, _ = _credentials()
     url = f"{API}/bot{token}/{method}"
     last_error: Exception | None = None
     for attempt in range(RETRIES):
         try:
+            files = None
+            if file_field:
+                name, filename, content = file_field
+                files = {name: (filename, content)}
             response = requests.post(url, data=data, files=files, timeout=60)
             if response.status_code == 429:
                 retry_after = response.json().get("parameters", {}) \
@@ -79,7 +93,7 @@ def _post(method: str, *, data: dict, files: dict | None = None) -> None:
             response.raise_for_status()
             return
         except (requests.RequestException, ValueError) as exc:
-            last_error = exc
+            last_error = _redacted(exc, token)
             time.sleep(BACKOFF_BASE_S * 2 ** attempt)
     raise last_error  # type: ignore[misc]
 
@@ -94,10 +108,9 @@ def send_summary(summary_markdown: str, title: str) -> None:
 
 def send_document(path: Path, caption: str) -> None:
     _, chat_id = _credentials()
-    with path.open("rb") as fh:
-        _post("sendDocument",
-              data={"chat_id": chat_id, "caption": caption[:1024]},
-              files={"document": (path.name, fh)})
+    _post("sendDocument",
+          data={"chat_id": chat_id, "caption": caption[:1024]},
+          file_field=("document", path.name, path.read_bytes()))
 
 
 def deliver(cfg: dict, session_dir: Path, summary: str, title: str) -> bool:
@@ -152,6 +165,9 @@ def flush_queue() -> int:
 def test_connection() -> str:
     """getMe roundtrip; returns the bot username."""
     token, _ = _credentials()
-    response = requests.get(f"{API}/bot{token}/getMe", timeout=30)
-    response.raise_for_status()
+    try:
+        response = requests.get(f"{API}/bot{token}/getMe", timeout=30)
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        raise _redacted(exc, token) from None
     return response.json()["result"]["username"]

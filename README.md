@@ -198,8 +198,8 @@ meetrec stop             # stop a running daemon
 meetrec status           # daemon state, current recording, recent log lines
 meetrec pause            # toggle: skip new meetings until toggled back
 meetrec pause --for 2h   # pause with automatic resume (30m, 2h, 1h30m, ...)
-meetrec record           # record manually right now (Enter stops) — for
-                         #   in-person meetings or apps detection misses
+meetrec record           # record manually right now (Enter stops); add
+                         #   --in-person for room meetings (see below)
 meetrec list             # all sessions with duration/language/state/speakers
 meetrec summary <dir>    # regenerate just the summary (--backend, --language,
                          #   --resend to push the new one to Telegram)
@@ -245,6 +245,35 @@ speakers (points you to `meetrec label`), and errors.
 
 If recognition is too eager (wrong names), raise the threshold to 0.8–0.85;
 if familiar people keep coming out as `SPEAKER_XX`, lower it toward 0.65.
+
+## In-person meetings
+
+meetrec also records meetings that happen **in the same room** — no call
+involved:
+
+```powershell
+meetrec record --in-person     # press Enter when the meeting ends
+```
+
+In this mode everyone's voice arrives through the microphone, so the usual
+assumption ("the mic track is you") is wrong. `--in-person` flips the
+pipeline: the **mic track is diarized** and every voice in the room —
+including yours — goes through speaker identification against the voiceprint
+database. Label people once with `meetrec label` (yourself included) and
+they are recognized automatically in future in-person meetings.
+
+Practical tips for room recordings:
+
+- Put the laptop centrally; a conference/array microphone helps a lot with
+  speakers far from it.
+- Diarization quality on room audio is inherently lower than on clean call
+  audio — expect more `SPEAKER_XX` fragments when people talk over each
+  other.
+- The system track is still recorded (usually silence); anything the laptop
+  plays during the meeting is kept on it, correctly separated.
+- Automatic detection doesn't trigger for in-person meetings (no app is
+  capturing the mic), which is exactly why `record` exists — and why it
+  still shows the mandatory recording notification.
 
 ## Configuration reference
 

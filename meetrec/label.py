@@ -37,9 +37,9 @@ def _extract_excerpt(wav_path: Path, start: float, end: float,
 
 
 def _extract_excerpt_flac(flac_path: Path, start: float, end: float,
-                          out_path: Path) -> None:
-    """Fallback when track_sys.wav was cleaned up: the system track lives on
-    the right channel of audio.flac."""
+                          out_path: Path, channel: int = 1) -> None:
+    """Fallback when the track WAV was cleaned up: mic lives on the left
+    channel (0) of audio.flac, system audio on the right (1)."""
     import numpy as np
     import soundfile as sf
 
@@ -48,7 +48,8 @@ def _extract_excerpt_flac(flac_path: Path, start: float, end: float,
         flac.seek(int(start * rate))
         frames = flac.read(int(min(end - start, EXCERPT_MAX_S) * rate),
                            dtype="int16", always_2d=True)
-    channel = frames[:, 1] if frames.shape[1] > 1 else frames[:, 0]
+    channel = frames[:, channel] if frames.shape[1] > channel \
+        else frames[:, 0]
     with wave.open(str(out_path), "wb") as out:
         out.setnchannels(1)
         out.setsampwidth(2)
@@ -74,8 +75,15 @@ def label_session(cfg: dict, session_dir: Path) -> bool:
         print("Every speaker in this session is already identified.")
         return False
 
-    sys_wav = session_dir / "track_sys.wav"
+    meta_path = session_dir / "meta.json"
+    meta = (_read_json(meta_path) if meta_path.exists() else {})
+    # in-person sessions were diarized on the mic track (FLAC left channel);
+    # online sessions on the system track (right channel)
+    in_person = bool(meta.get("in_person"))
+    sys_wav = session_dir / ("track_mic.wav" if in_person
+                             else "track_sys.wav")
     flac = session_dir / "audio.flac"
+    flac_channel = 0 if in_person else 1
     excerpt_dir = session_dir / "excerpts"
     excerpt_dir.mkdir(exist_ok=True)
     db = VoiceprintDB(data_dir() / "voiceprints.db")
@@ -92,7 +100,8 @@ def label_session(cfg: dict, session_dir: Path) -> bool:
                 if sys_wav.exists():
                     _extract_excerpt(sys_wav, seg["start"], seg["end"], out)
                 elif flac.exists():
-                    _extract_excerpt_flac(flac, seg["start"], seg["end"], out)
+                    _extract_excerpt_flac(flac, seg["start"], seg["end"], out,
+                                          channel=flac_channel)
                 else:
                     print("  (no audio file found — cannot play excerpts)")
                     break

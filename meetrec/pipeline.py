@@ -44,15 +44,27 @@ def _restore_tracks_from_flac(session_dir: Path) -> None:
     flac = session_dir / "audio.flac"
     if not flac.exists():
         return
-    targets = [(session_dir / "track_mic.wav", 0),
-               (session_dir / "track_sys.wav", 1)]
+    targets = [(session_dir / f"track_{side}.wav", channel)
+               for side, channel in FLAC_CHANNELS.items()]
     if all(path.exists() for path, _ in targets):
         return
     data, rate = sf.read(flac, dtype="int16", always_2d=True)
     for path, channel in targets:
-        if not path.exists() and data.shape[1] > channel:
-            sf.write(path, data[:, channel], rate, subtype="PCM_16")
-            log.info("Restored %s from audio.flac", path.name)
+        if path.exists() or data.shape[1] <= channel:
+            continue
+        track = data[:, channel]
+        if not np.any(track):
+            # that side never recorded — a silent channel, not a track
+            log.info("Not restoring %s: its FLAC channel is silent",
+                     path.name)
+            continue
+        sf.write(path, track, rate, subtype="PCM_16")
+        log.info("Restored %s from audio.flac", path.name)
+
+
+FLAC_CHANNELS = {"mic": 0, "sys": 1}  # identity-based, NEVER positional:
+# _restore_tracks_from_flac and label read channels by this same mapping,
+# so a missing track must leave its channel silent, not shift the other in
 
 
 def _mix_to_flac(session_dir: Path) -> None:
@@ -60,41 +72,36 @@ def _mix_to_flac(session_dir: Path) -> None:
     right. Keeps the originals' timeline; resamples to the higher rate."""
     import soundfile as sf
 
-    mic_path = session_dir / "track_mic.wav"
-    sys_path = session_dir / "track_sys.wav"
-    tracks = []
-    rates = []
-    for path in (mic_path, sys_path):
+    loaded: dict[str, tuple] = {}
+    for side in FLAC_CHANNELS:
+        path = session_dir / f"track_{side}.wav"
         if path.exists():
             data, rate = sf.read(path, dtype="float32", always_2d=True)
-            tracks.append(data.mean(axis=1))  # mono
-            rates.append(rate)
-    if not tracks:
+            loaded[side] = (data.mean(axis=1), rate)
+    if not loaded:
         return
-    target_rate = max(rates)
-    resampled = []
-    for data, rate in zip(tracks, rates):
+    target_rate = max(rate for _, rate in loaded.values())
+    length = 0
+    for side, (data, rate) in loaded.items():
         if rate != target_rate:
             n_out = int(len(data) * target_rate / rate)
             idx = np.linspace(0, len(data) - 1, n_out)
             data = data[idx.round().astype(int)]
-        resampled.append(data)
-    length = max(len(t) for t in resampled)
+            loaded[side] = (data, target_rate)
+        length = max(length, len(loaded[side][0]))
     stereo = np.zeros((length, 2), dtype=np.float32)
-    stereo[:len(resampled[0]), 0] = resampled[0]
-    if len(resampled) > 1:
-        stereo[:len(resampled[1]), 1] = resampled[1]
+    for side, (data, _) in loaded.items():
+        stereo[:len(data), FLAC_CHANNELS[side]] = data
     sf.write(session_dir / "audio.flac", stereo, target_rate)
 
 
-def _identify_speakers(cfg: dict, session_dir: Path,
-                       turns: list[dict]) -> dict[str, str]:
+def _identify_speakers(cfg: dict, session_dir: Path, turns: list[dict],
+                       source_wav: Path) -> dict[str, str]:
     """Map diarized labels (SPEAKER_00…) to known names via the voiceprint DB.
 
     Saves per-speaker embeddings to embeddings.npz for `meetrec label`.
     """
-    sys_wav = session_dir / "track_sys.wav"
-    embeddings = speaker_embeddings(sys_wav, turns)
+    embeddings = speaker_embeddings(source_wav, turns)
     if embeddings:
         np.savez(session_dir / "embeddings.npz", **embeddings)
 
@@ -133,25 +140,38 @@ def regenerate_transcripts(session_dir: Path,
     if (session_dir / "speaker_map.json").exists():
         speaker_map = _read_json(session_dir / "speaker_map.json")
 
-    for seg in sys_tr["segments"]:
+    meta_path = session_dir / "meta.json"
+    meta = _read_json(meta_path) if meta_path.exists() else {}
+    in_person = bool(meta.get("in_person"))
+
+    diarized = mic["segments"] if in_person else sys_tr["segments"]
+    for seg in diarized:
         raw = seg.get("speaker", "SPEAKER_??")
         seg["speaker"] = speaker_map.get(raw, raw)
 
-    mic_segments = mic["segments"]
-    if echo_dedup:
-        before = len(mic_segments)
-        mic_segments = drop_mic_echo(mic_segments, sys_tr["segments"])
-        if len(mic_segments) < before:
-            log.info("Echo dedup: dropped %d mic segment(s) that duplicated "
-                     "system audio (speaker bleed)",
-                     before - len(mic_segments))
-    blocks = merge_tracks(mic_segments, sys_tr["segments"],
+    if in_person:
+        # everyone (user included) is on the mic track and was diarized —
+        # there is no separate "self" track to label or dedup against
+        mic_segments = []
+        sys_segments = mic["segments"]
+    else:
+        sys_segments = sys_tr["segments"]
+        mic_segments = mic["segments"]
+        if echo_dedup:
+            before = len(mic_segments)
+            mic_segments = drop_mic_echo(mic_segments, sys_segments)
+            if len(mic_segments) < before:
+                log.info("Echo dedup: dropped %d mic segment(s) that "
+                         "duplicated system audio (speaker bleed)",
+                         before - len(mic_segments))
+    blocks = merge_tracks(mic_segments, sys_segments,
                           self_label=self_label)
     speakers = sorted({b["speaker"] for b in blocks})
-    language = sys_tr["language"] or mic["language"] or "en"
+    if in_person:
+        language = mic["language"] or sys_tr["language"] or "en"
+    else:
+        language = sys_tr["language"] or mic["language"] or "en"
 
-    meta_path = session_dir / "meta.json"
-    meta = _read_json(meta_path) if meta_path.exists() else {}
     meta.update({
         "date": meta.get("date") or session_dir.name,
         "language": language,
@@ -211,28 +231,42 @@ def process_session(cfg: dict, session_dir: Path,
             rec.note(stage_name, language=result["language"],
                      segments=len(result["segments"]))
 
-    # 2. diarization + speaker identity (system track only; mic is MYSELF)
+    # 2. diarization + speaker identity. Online meetings: system track only
+    # (the mic is the user by construction). In-person meetings: everyone is
+    # on the mic track, so THAT is what gets diarized.
+    meta_path = session_dir / "meta.json"
+    session_meta = _read_json(meta_path) if meta_path.exists() else {}
+    in_person = bool(session_meta.get("in_person"))
+    diar_wav = mic_wav if in_person else sys_wav
+    diar_transcript = ("transcript_mic.json" if in_person
+                       else "transcript_sys.json")
+
     unknown_count = 0
-    if not sys_wav.exists() and not (session_dir / "diarization.json").exists():
-        rec.skip("diarization", "track_sys.wav not found")
+    if not diar_wav.exists() and not (session_dir / "diarization.json").exists():
+        rec.skip("diarization", f"{diar_wav.name} not found")
     else:
         with rec.stage("diarization"):
             try:
                 diar_path = session_dir / "diarization.json"
                 if not diar_path.exists():
-                    _write_json(diar_path, diarize_track(sys_wav))
+                    _write_json(diar_path, diarize_track(diar_wav))
                 turns = _read_json(diar_path)
 
-                sys_tr = _read_json(session_dir / "transcript_sys.json")
-                assign_speakers_to_segments(sys_tr["segments"], turns)
-                _write_json(session_dir / "transcript_sys.json", sys_tr)
+                tr = _read_json(session_dir / diar_transcript)
+                assign_speakers_to_segments(tr["segments"], turns)
+                _write_json(session_dir / diar_transcript, tr)
 
-                mapping = _identify_speakers(cfg, session_dir, turns)
-                _write_json(session_dir / "speaker_map.json", mapping)
+                mapping = _identify_speakers(cfg, session_dir, turns,
+                                             diar_wav)
+                map_path = session_dir / "speaker_map.json"
+                if map_path.exists():
+                    # names assigned via `meetrec label` beat auto-matching
+                    mapping = {**mapping, **_read_json(map_path)}
+                _write_json(map_path, mapping)
                 all_speakers = {t["speaker"] for t in turns}
                 unknown_count = len(all_speakers - set(mapping))
                 rec.note("diarization", speakers=len(all_speakers),
-                         recognized=len(mapping))
+                         recognized=len(mapping), in_person=in_person)
             except HFTokenMissing:
                 if with_notifications:
                     notify.error("Diarization skipped: HF_TOKEN not configured")

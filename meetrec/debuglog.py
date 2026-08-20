@@ -59,15 +59,19 @@ class StageRecorder:
                 "at": time.strftime("%Y-%m-%d %H:%M:%S"),
             }
             self.issues.append(issue)
-            self.stages[name] = {"ok": False, "seconds": seconds,
-                                 "error": issue["error"]}
+            # update, don't replace: note()/skip() calls made inside the
+            # stage block must survive its exit
+            self.stages.setdefault(name, {}).update(
+                ok=False, seconds=seconds, error=issue["error"])
             self._flush()
             log.exception("stage %s FAILED after %.1fs", name, seconds)
             if fatal or self.strict:
                 raise StageError(f"stage {name} failed: {exc}") from exc
         else:
             seconds = round(time.time() - started, 1)
-            self.stages[name] = {"ok": True, "seconds": seconds}
+            entry = self.stages.setdefault(name, {})
+            entry.update(seconds=seconds)
+            entry.setdefault("ok", True)  # a skip() inside the block wins
             self._flush()
             log.info("stage %s: ok (%.1fs)", name, seconds)
 

@@ -50,6 +50,21 @@ def _require_token() -> str:
     return token
 
 
+def _audio_dict(wav_path: Path) -> dict:
+    """Load audio ourselves (soundfile) and hand pyannote an in-memory
+    waveform. pyannote 4.x otherwise decodes files through torchcodec,
+    which requires FFmpeg shared DLLs on Windows — a dependency users
+    should not need for plain PCM WAVs."""
+    import soundfile as sf
+    import torch
+
+    data, rate = sf.read(str(wav_path), dtype="float32", always_2d=True)
+    waveform = torch.from_numpy(data.T.copy())  # (channels, time)
+    if waveform.shape[0] > 1:
+        waveform = waveform.mean(dim=0, keepdim=True)
+    return {"waveform": waveform, "sample_rate": rate}
+
+
 def _from_pretrained(cls, model: str, token: str):
     """pyannote.audio 4.x takes token=, 3.x takes use_auth_token=."""
     try:
@@ -68,7 +83,7 @@ def diarize_track(wav_path: Path) -> list[dict]:
     if torch.cuda.is_available():
         pipeline.to(torch.device("cuda"))
     log.info("Diarizing %s ...", wav_path.name)
-    annotation = pipeline(str(wav_path))
+    annotation = pipeline(_audio_dict(wav_path))
     turns = [
         {"speaker": speaker, "start": round(turn.start, 2),
          "end": round(turn.end, 2)}
@@ -95,13 +110,14 @@ def speaker_embeddings(wav_path: Path, turns: list[dict]) -> dict[str, np.ndarra
         if turn["end"] - turn["start"] >= MIN_SEGMENT_S:
             by_speaker.setdefault(turn["speaker"], []).append(turn)
 
+    audio = _audio_dict(wav_path)
     embeddings: dict[str, np.ndarray] = {}
     for speaker, segs in by_speaker.items():
         segs = sorted(segs, key=lambda s: s["end"] - s["start"], reverse=True)
         vectors = []
         for seg in segs[:MAX_SEGMENTS_PER_SPEAKER]:
             try:
-                vec = inference.crop(str(wav_path),
+                vec = inference.crop(audio,
                                      Segment(seg["start"], seg["end"]))
                 vectors.append(np.asarray(vec, dtype=np.float32).reshape(-1))
             except Exception:

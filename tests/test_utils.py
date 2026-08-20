@@ -75,6 +75,14 @@ def test_cleanup_dry_run_deletes_nothing(tmp_path):
     assert audio.exists()
 
 
+def test_deep_merge_empty_yaml_section_keeps_defaults():
+    from meetrec.config import _deep_merge
+    base = {"telegram": {"enabled": True, "send_full_transcript": False}}
+    # "telegram:" with all keys deleted parses from YAML as None
+    merged = _deep_merge(base, {"telegram": None})
+    assert merged["telegram"] == base["telegram"]
+
+
 def test_parse_duration():
     assert _parse_duration("30m") == 1800
     assert _parse_duration("2h") == 7200

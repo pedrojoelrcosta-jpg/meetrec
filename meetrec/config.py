@@ -91,6 +91,10 @@ def _deep_merge(base: dict, override: dict) -> dict:
     for key, value in override.items():
         if isinstance(value, dict) and isinstance(merged.get(key), dict):
             merged[key] = _deep_merge(merged[key], value)
+        elif value is None and isinstance(merged.get(key), dict):
+            # an emptied-out YAML section ("telegram:" with no keys) parses
+            # as None — keep the defaults instead of wiping the section
+            continue
         else:
             merged[key] = value
     return merged

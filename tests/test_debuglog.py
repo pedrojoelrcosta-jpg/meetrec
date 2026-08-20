@@ -41,6 +41,15 @@ def test_strict_mode_reraises_nonfatal(tmp_path):
             raise ValueError("x")
 
 
+def test_note_inside_stage_block_survives_exit(tmp_path):
+    rec = StageRecorder(tmp_path)
+    with rec.stage("transcribe"):
+        rec.note("transcribe", language="pt", segments=7)
+    data = load_debug(tmp_path)
+    assert data["stages"]["transcribe"]["language"] == "pt"
+    assert data["stages"]["transcribe"]["ok"] is True
+
+
 def test_skip_and_note_are_visible(tmp_path):
     rec = StageRecorder(tmp_path)
     rec.skip("diarization", "track_sys.wav not found")

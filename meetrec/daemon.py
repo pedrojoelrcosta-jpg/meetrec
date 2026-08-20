@@ -27,10 +27,15 @@ log = logging.getLogger(__name__)
 
 STATE_FILE = "daemon_state.json"
 PAUSE_FILE = "paused"
+STOP_FILE = "stop_requested"
 
 
 def state_path() -> Path:
     return data_dir() / STATE_FILE
+
+
+def stop_path() -> Path:
+    return data_dir() / STOP_FILE
 
 
 def pause_path() -> Path:
@@ -70,7 +75,13 @@ def find_unprocessed_sessions(cfg: dict) -> list[Path]:
         from .config import find_transcript
         has_audio = any((session / n).exists() for n in
                         ("track_mic.wav", "track_sys.wav", "audio.flac"))
-        if has_audio and find_transcript(session) is None:
+        from .config import LEGACY_SUMMARY_MD, SUMMARY_MD
+        has_summary = any((session / n).exists()
+                          for n in (SUMMARY_MD, LEGACY_SUMMARY_MD))
+        # no transcript: crashed before/at transcription. Transcript but no
+        # summary: crashed between the merge and delivery stages — a window
+        # the old check missed, silently losing the summary forever.
+        if has_audio and (find_transcript(session) is None or not has_summary):
             pending.append(session)
     return pending
 
@@ -91,6 +102,7 @@ class Daemon:
         self.recorder: DualTrackRecorder | None = None
         self._work: queue.Queue[Path] = queue.Queue()
         self._stop = threading.Event()
+        self._state_lock = threading.Lock()
         self.state = "IDLE"
         det = cfg["detector"]
         self.detector = MeetingDetector(
@@ -160,17 +172,25 @@ class Daemon:
     # -- lifecycle ----------------------------------------------------------
 
     def _write_state(self) -> None:
-        state_path().write_text(json.dumps({
+        # written from the main loop AND the worker thread, and read by other
+        # processes (`meetrec status`) — write to a temp file and atomically
+        # replace so readers never see a torn write
+        payload = json.dumps({
             "pid": os.getpid(),
             "state": self.state,
             "paused": pause_path().exists(),
             "recording_dir": str(self.recorder.session_dir)
             if self.recorder else None,
             "updated_at": time.time(),
-        }), encoding="utf-8")
+        })
+        with self._state_lock:
+            tmp = state_path().with_suffix(f".tmp{os.getpid()}")
+            tmp.write_text(payload, encoding="utf-8")
+            os.replace(tmp, state_path())
 
     def run(self) -> None:
         log.info("meetrec daemon started (pid %s)", os.getpid())
+        stop_path().unlink(missing_ok=True)
         telegram.flush_queue()
         worker = threading.Thread(target=self._worker, daemon=True)
         worker.start()
@@ -181,7 +201,7 @@ class Daemon:
         try:
             last_beat = 0.0
             last_sweep = time.monotonic()
-            while True:
+            while not stop_path().exists():
                 self.detector.tick(time.monotonic(),
                                    self.detector._scan_fn())
                 if time.monotonic() - last_beat > 30:
@@ -195,10 +215,24 @@ class Daemon:
                         log.exception("audio retention sweep failed")
                     last_sweep = time.monotonic()
                 time.sleep(self.cfg["detector"]["poll_interval_s"])
+            log.info("Stop requested via `meetrec stop`")
         except KeyboardInterrupt:
             log.info("Interrupted")
         finally:
             if self.recorder:
                 self._on_ended(0.0)
             self._stop.set()
+            # the worker is a daemon thread: without this join, interpreter
+            # shutdown kills it mid-stage and the summary/delivery of the
+            # session being processed would be lost until the next start
+            if worker.is_alive() and not self._work.empty() \
+                    or self.state == "PROCESSING":
+                log.info("Waiting for processing to finish (Ctrl+C again "
+                         "to abandon; it resumes on next start)...")
+            try:
+                worker.join(timeout=1800)
+            except KeyboardInterrupt:
+                log.warning("Processing abandoned — it will resume on the "
+                            "next daemon start")
+            stop_path().unlink(missing_ok=True)
             state_path().unlink(missing_ok=True)

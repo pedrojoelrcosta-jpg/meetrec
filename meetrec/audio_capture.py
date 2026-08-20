@@ -50,7 +50,10 @@ class _TrackRecorder(threading.Thread):
     def _open_stream(self):
         device = self._get_device(self._pa)
         rate = int(device["defaultSampleRate"])
-        channels = min(2, max(1, int(device["maxInputChannels"])))
+        # WASAPI loopback streams must be opened with the device's real
+        # channel count (a 5.1 output would fail if clamped to 2); the
+        # capture loop downmixes to the target layout afterwards
+        channels = max(1, int(device["maxInputChannels"]))
         stream = self._pa.open(
             format=pyaudio.paInt16,
             channels=channels,
@@ -61,17 +64,28 @@ class _TrackRecorder(threading.Thread):
         )
         return stream, rate, channels
 
+    def _reset_pa(self) -> None:
+        """PortAudio snapshots the device list when PyAudio is constructed,
+        so recovering from a device change requires a fresh instance."""
+        try:
+            if self._pa:
+                self._pa.terminate()
+        except Exception:
+            pass
+        self._pa = pyaudio.PyAudio()
+
     def run(self) -> None:
         self._pa = pyaudio.PyAudio()
         wav = None
         stream = None
         try:
-            stream, self.rate, self.channels = self._open_stream()
+            stream, self.rate, src_channels0 = self._open_stream()
+            self.channels = min(2, src_channels0)  # WAV target layout
             wav = wave.open(str(self._wav_path), "wb")
             wav.setnchannels(self.channels)
             wav.setsampwidth(2)
             wav.setframerate(self.rate)
-            src_rate, src_channels = self.rate, self.channels
+            src_rate, src_channels = self.rate, src_channels0
             last_ok = time.monotonic()
 
             while not self._stop.is_set():
@@ -85,6 +99,7 @@ class _TrackRecorder(threading.Thread):
                         pass
                     stream = None
                     while stream is None and not self._stop.is_set():
+                        self._reset_pa()  # refresh PortAudio's device list
                         try:
                             stream, src_rate, src_channels = self._open_stream()
                         except OSError:
@@ -102,12 +117,17 @@ class _TrackRecorder(threading.Thread):
                 last_ok = time.monotonic()
                 samples = np.frombuffer(data, dtype=np.int16)
                 if src_channels != self.channels:
-                    samples = samples.reshape(-1, src_channels)
-                    if self.channels == 1:
-                        samples = samples.mean(axis=1).astype(np.int16)
+                    frames = samples.reshape(-1, src_channels)
+                    if src_channels > self.channels:
+                        if self.channels == 2 and src_channels >= 2:
+                            # multichannel -> stereo: front L/R carry speech
+                            frames = frames[:, :2]
+                        else:
+                            frames = frames.mean(axis=1, keepdims=True) \
+                                           .astype(np.int16)
                     else:  # mono -> stereo
-                        samples = np.repeat(samples, 2, axis=1)[:, :2]
-                    samples = samples.reshape(-1)
+                        frames = np.repeat(frames, self.channels, axis=1)
+                    samples = frames.reshape(-1)
                 if src_rate != self.rate:
                     frames = samples.reshape(-1, self.channels)
                     n_out = int(len(frames) * self.rate / src_rate)
@@ -157,13 +177,21 @@ class DualTrackRecorder:
         self._stop.set()
         self.mic.join(timeout=10)
         self.sys.join(timeout=10)
+
+        def track_stats(track: _TrackRecorder) -> dict:
+            error = str(track.error) if track.error else None
+            if track.is_alive():
+                # the writer thread is stuck — the WAV may still be growing
+                # and its header is not finalized; surface that loudly
+                log.error("%s did not stop within 10s", track.name)
+                error = error or "recorder thread did not stop within 10s"
+            return {"rate": track.rate, "channels": track.channels,
+                    "seconds": round(track.seconds_written, 1),
+                    "error": error}
+
         return {
             "duration_s": round(max(self.mic.seconds_written,
                                     self.sys.seconds_written), 1),
-            "mic": {"rate": self.mic.rate, "channels": self.mic.channels,
-                    "seconds": round(self.mic.seconds_written, 1),
-                    "error": str(self.mic.error) if self.mic.error else None},
-            "sys": {"rate": self.sys.rate, "channels": self.sys.channels,
-                    "seconds": round(self.sys.seconds_written, 1),
-                    "error": str(self.sys.error) if self.sys.error else None},
+            "mic": track_stats(self.mic),
+            "sys": track_stats(self.sys),
         }

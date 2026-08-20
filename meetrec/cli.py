@@ -127,10 +127,13 @@ def cmd_record(cfg: dict, args) -> None:
     from .audio_capture import DualTrackRecorder
     from .pipeline import new_session_dir, process_session
     _setup_logging()
+    in_person = getattr(args, "in_person", False)
     recorder = DualTrackRecorder(new_session_dir(cfg))
     recorder.start()
     notify.recording_started({"manual recording"})
-    print(f"Recording to {recorder.session_dir}")
+    print(f"Recording to {recorder.session_dir}"
+          + (" (in-person mode: the mic track will be diarized)"
+             if in_person else ""))
     input("Press Enter to stop...\n")
     stats = recorder.stop()
     print(f"Recorded {stats['duration_s']}s. Processing...")
@@ -138,7 +141,8 @@ def cmd_record(cfg: dict, args) -> None:
     (recorder.session_dir / "meta.json").write_text(
         _json.dumps({"date": recorder.session_dir.name,
                      "duration_s": stats["duration_s"], "tracks": stats,
-                     "manual": True}, ensure_ascii=False, indent=2),
+                     "manual": True, "in_person": in_person},
+                    ensure_ascii=False, indent=2),
         encoding="utf-8")
     process_session(cfg, recorder.session_dir)
     print(f"Done: {recorder.session_dir}")
@@ -198,15 +202,31 @@ def cmd_summary(cfg: dict, args) -> None:
 
 
 def cmd_stop(cfg: dict, args) -> None:
-    from .daemon import read_state, state_path
+    from .daemon import read_state, state_path, stop_path
     state = read_state()
     if not state or not _pid_alive(state["pid"]):
         state_path().unlink(missing_ok=True)
+        stop_path().unlink(missing_ok=True)
         print("Daemon is not running.")
         return
-    subprocess.run(["taskkill", "/PID", str(state["pid"]), "/F"], check=False)
-    state_path().unlink(missing_ok=True)
-    print(f"Daemon (pid {state['pid']}) stopped.")
+    if getattr(args, "force", False):
+        # taskkill /F gives the daemon no chance to run cleanup — an
+        # in-flight processing job is resumed on the next start
+        subprocess.run(["taskkill", "/PID", str(state["pid"]), "/F"],
+                       check=False)
+        state_path().unlink(missing_ok=True)
+        print(f"Daemon (pid {state['pid']}) killed.")
+        return
+    stop_path().write_text(datetime.now().isoformat(), encoding="utf-8")
+    print("Stop requested — waiting for the daemon to exit cleanly", end="")
+    for _ in range(15):
+        time.sleep(1)
+        print(".", end="", flush=True)
+        if not _pid_alive(state["pid"]):
+            print("\nDaemon stopped.")
+            return
+    print("\nDaemon is still finishing (likely processing a meeting). It "
+          "will exit when done; use `meetrec stop --force` to kill it now.")
 
 
 def cmd_status(cfg: dict, args) -> None:
@@ -448,15 +468,23 @@ def main() -> None:
                                  "config, Telegram pairing, autostart")
 
     sub.add_parser("start", help="run the daemon (foreground)")
-    sub.add_parser("stop", help="stop a running daemon")
+
+    p = sub.add_parser("stop", help="stop a running daemon (graceful)")
+    p.add_argument("--force", action="store_true",
+                   help="kill immediately instead of finishing processing")
+
     sub.add_parser("status", help="show daemon state")
 
     p = sub.add_parser("pause", help="toggle pause (skip new meetings)")
     p.add_argument("--for", dest="duration", metavar="DURATION",
                    help="auto-resume after e.g. 30m, 2h, 1h30m")
 
-    sub.add_parser("record",
-                   help="record manually now (Enter stops), then process")
+    p = sub.add_parser("record",
+                       help="record manually now (Enter stops), then process")
+    p.add_argument("--in-person", action="store_true", dest="in_person",
+                   help="in-person meeting: everyone is in the room, so the "
+                        "MIC track is diarized (instead of labeling it as "
+                        "you) and speakers are identified from it")
     sub.add_parser("list", help="list sessions and their processing state")
 
     p = sub.add_parser("summary",

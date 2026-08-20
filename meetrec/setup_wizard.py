@@ -28,8 +28,12 @@ LINKS = {
 }
 
 
-def _ask(prompt: str, default: str = "") -> str:
-    suffix = f" [{default}]" if default else ""
+def _ask(prompt: str, default: str = "",
+         display_default: str | None = None) -> str:
+    """display_default lets secrets show masked while Enter keeps the real
+    value — full tokens must never be echoed back to the console."""
+    shown = display_default if display_default is not None else default
+    suffix = f" [{shown}]" if shown else ""
     value = input(f"  {prompt}{suffix}: ").strip()
     return value or default
 
@@ -117,7 +121,7 @@ def run_wizard(cfg: dict) -> None:
     current = env.get("HF_TOKEN", "")
     token = _ask("HF token (Enter keeps current)" if current
                  else "HF token (Enter skips diarization for now)",
-                 current)
+                 current, display_default=_mask(current) if current else "")
     env["HF_TOKEN"] = token
     print(f"   -> {_mask(token) if token else 'skipped'}\n")
 
@@ -126,7 +130,9 @@ def run_wizard(cfg: dict) -> None:
     print(f"   Create one at {LINKS['gemini']}")
     print("   Skipping is fine: a local Ollama model is used instead.")
     current = env.get("GEMINI_API_KEY", "")
-    env["GEMINI_API_KEY"] = _ask("Gemini key", current)
+    env["GEMINI_API_KEY"] = _ask(
+        "Gemini key", current,
+        display_default=_mask(current) if current else "")
     print(f"   -> {_mask(env['GEMINI_API_KEY']) if env['GEMINI_API_KEY'] else 'skipped (Ollama fallback)'}\n")
 
     # 3. Telegram
@@ -134,7 +140,8 @@ def run_wizard(cfg: dict) -> None:
     print(f"   Create a bot with {LINKS['botfather']} (/newbot) and paste "
           "its token.")
     current = env.get("TELEGRAM_BOT_TOKEN", "")
-    bot_token = _ask("Bot token", current)
+    bot_token = _ask("Bot token", current,
+                     display_default=_mask(current) if current else "")
     env["TELEGRAM_BOT_TOKEN"] = bot_token
     if bot_token:
         chat_id = env.get("TELEGRAM_CHAT_ID", "")
@@ -163,7 +170,10 @@ def run_wizard(cfg: dict) -> None:
         "Send the FULL transcript to Telegram too? (summary is always sent)",
         cfg["telegram"]["send_full_transcript"])
 
-    config_path = PROJECT_ROOT / "config.yaml"
+    # user choices go to config.local.yaml (gitignored overlay), never to
+    # the committed config.yaml — keeps its comments intact and keeps the
+    # working tree clean for future `git pull`s
+    config_path = PROJECT_ROOT / "config.local.yaml"
     file_cfg = {}
     if config_path.exists():
         file_cfg = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
@@ -171,11 +181,12 @@ def run_wizard(cfg: dict) -> None:
     file_cfg.setdefault("summary", {})["language"] = language
     file_cfg.setdefault("transcription", {})["multilingual"] = multilingual
     file_cfg.setdefault("telegram", {})["send_full_transcript"] = send_transcript
-    config_path.write_text(yaml.safe_dump(file_cfg, sort_keys=False,
-                                          allow_unicode=True),
-                           encoding="utf-8")
+    config_path.write_text(
+        "# Written by `meetrec setup` — overrides config.yaml. Gitignored.\n"
+        + yaml.safe_dump(file_cfg, sort_keys=False, allow_unicode=True),
+        encoding="utf-8")
     _write_env(env_path, env)
-    print(f"\n  Saved {env_path.name} and config.yaml.\n")
+    print(f"\n  Saved {env_path.name} and config.local.yaml.\n")
     for key, value in env.items():
         if value:
             os.environ[key] = value

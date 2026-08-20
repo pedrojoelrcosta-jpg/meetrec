@@ -101,12 +101,16 @@ def _deep_merge(base: dict, override: dict) -> dict:
 
 
 def load_config(path: Path | None = None) -> dict:
+    """DEFAULTS <- config.yaml (repo, commented) <- config.local.yaml
+    (gitignored — written by `meetrec setup`, survives git pulls)."""
     load_dotenv(PROJECT_ROOT / ".env")
-    path = path or PROJECT_ROOT / "config.yaml"
-    user_cfg = {}
-    if path.exists():
-        user_cfg = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    cfg = _deep_merge(DEFAULTS, user_cfg)
+    cfg = DEFAULTS
+    layers = [path] if path else [PROJECT_ROOT / "config.yaml",
+                                  PROJECT_ROOT / "config.local.yaml"]
+    for layer in layers:
+        if layer and layer.exists():
+            loaded = yaml.safe_load(layer.read_text(encoding="utf-8")) or {}
+            cfg = _deep_merge(cfg, loaded)
     cfg["output"]["dir"] = str(Path(cfg["output"]["dir"]).expanduser())
     return cfg
 

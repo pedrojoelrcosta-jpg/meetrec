@@ -278,7 +278,9 @@ Practical tips for room recordings:
 ## Configuration reference
 
 Everything lives in [`config.yaml`](config.yaml); every key has a default in
-code, so a missing key just falls back.
+code, so a missing key just falls back. `meetrec setup` writes your choices
+to `config.local.yaml` (gitignored), which overrides `config.yaml` — edit
+either, the local file wins.
 
 | Key | Default | Meaning |
 |---|---|---|

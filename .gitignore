@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 *.egg-info/
 .env
+config.local.yaml
 .pytest_cache/
 *.wav
 *.flac
